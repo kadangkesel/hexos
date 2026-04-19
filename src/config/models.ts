@@ -23,8 +23,36 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "cb/glm-5.0":              { provider: "codebuddy", model: "glm-5.0",             info: { id: "cb/glm-5.0", name: "GLM 5.0" } },
 };
 
+// Anthropic model name aliases → map to CodeBuddy equivalents
+const ANTHROPIC_ALIASES: Record<string, string> = {
+  // Opus variants
+  "claude-opus-4-5":              "cb/claude-opus-4.6",
+  "claude-opus-4-5-20251101":     "cb/claude-opus-4.6",
+  "claude-opus-4":                "cb/claude-opus-4.6",
+  "claude-opus-4-0":              "cb/claude-opus-4.6",
+  "claude-opus-4.5":              "cb/claude-opus-4.6",
+  "claude-opus-4.6":              "cb/claude-opus-4.6",
+  "claude-3-opus-20240229":       "cb/claude-opus-4.6",
+  "claude-3-5-sonnet-20241022":   "cb/claude-opus-4.6",
+  "claude-3-7-sonnet-20250219":   "cb/claude-opus-4.6",
+  "claude-sonnet-4-5":            "cb/claude-opus-4.6",
+  "claude-sonnet-4-5-20251101":   "cb/claude-opus-4.6",
+  "claude-sonnet-4":              "cb/claude-opus-4.6",
+  // Haiku variants
+  "claude-haiku-4-5":             "cb/claude-haiku-4.5",
+  "claude-haiku-4-5-20251101":    "cb/claude-haiku-4.5",
+  "claude-haiku-4":               "cb/claude-haiku-4.5",
+  "claude-3-haiku-20240307":      "cb/claude-haiku-4.5",
+  "claude-haiku-4.5":             "cb/claude-haiku-4.5",
+};
+
 export function resolveModel(modelId: string) {
-  return MODEL_CATALOG[modelId] ?? null;
+  // Direct lookup
+  if (MODEL_CATALOG[modelId]) return MODEL_CATALOG[modelId];
+  // Anthropic alias lookup
+  const alias = ANTHROPIC_ALIASES[modelId];
+  if (alias && MODEL_CATALOG[alias]) return MODEL_CATALOG[alias];
+  return null;
 }
 
 export function listModels() {
