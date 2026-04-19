@@ -53,13 +53,16 @@ export function openAIToAnthropicStream(
   let outputTokens = 0;
 
   return new ReadableStream({
-    async start(controller) {
+      async start(controller) {
       const reader = upstream.getReader();
       let buffer = "";
 
       const send = (event: string, data: any) => {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
+
+      // Anthropic SDK expects a ping event first
+      send("ping", { type: "ping" });
 
       try {
         while (true) {

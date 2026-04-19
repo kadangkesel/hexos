@@ -69,6 +69,9 @@ export function createApp() {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
+        "anthropic-version": "2023-06-01",
+        "request-id": messageId,
+        "x-request-id": messageId,
       },
     });
   });
