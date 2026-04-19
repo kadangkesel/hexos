@@ -70,8 +70,8 @@ async function pollCodebuddy(state: string, maxWait = 120000): Promise<{ accessT
       },
     });
     const data = await res.json() as any;
-    if (data.code === 0 && data.data?.access_token) {
-      return { accessToken: data.data.access_token, refreshToken: data.data.refresh_token ?? "" };
+    if (data.code === 0 && data.data?.accessToken) {
+      return { accessToken: data.data.accessToken, refreshToken: data.data.refreshToken ?? "" };
     }
     if (data.code !== 11217) throw new Error(`Auth error: ${JSON.stringify(data)}`);
   }
@@ -79,17 +79,16 @@ async function pollCodebuddy(state: string, maxWait = 120000): Promise<{ accessT
 }
 
 export async function refreshCodebuddy(refreshToken: string): Promise<{ accessToken: string; refreshToken: string }> {
-  const res = await fetch("https://www.codebuddy.ai/v2/plugin/auth/refresh", {
+  const res = await fetch("https://www.codebuddy.ai/v2/plugin/auth/token/refresh", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Refresh-Token": refreshToken,
-      "X-Domain": "www.codebuddy.ai",
+      "X-Auth-Refresh-Source": "plugin",
       "User-Agent": "codebuddy/2.91.0",
     },
-    body: JSON.stringify({}),
   });
   const data = await res.json() as any;
   if (data.code !== 0) throw new Error(`Refresh failed: ${JSON.stringify(data)}`);
-  return { accessToken: data.data.access_token, refreshToken: data.data.refresh_token ?? refreshToken };
+  return { accessToken: data.data.accessToken, refreshToken: data.data.refreshToken ?? refreshToken };
 }
