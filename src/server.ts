@@ -35,28 +35,33 @@ export function createApp() {
 
   // Chat completions
   app.post("/v1/chat/completions", async (c) => {
-    const body = await c.req.json();
+    let body: any;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: { message: "Invalid JSON body", type: "invalid_request_error", code: "bad_request" } }, 400);
+    }
     const modelId = body.model as string;
-    const stream = body.stream === true;
 
-    log.req("POST", "/v1/chat/completions", `model=${modelId} stream=${stream}`);
-
-    const upstream = await proxyRequest(modelId, body, stream);
-
-    if (stream) {
-      // Pipe SSE stream directly
-      return new Response(upstream.body, {
-        status: upstream.status,
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "X-Accel-Buffering": "no",
-        },
-      });
+    // CodeBuddy requires stream=true and a system message
+    body.stream = true;
+    if (!body.messages?.some((m: any) => m.role === "system")) {
+      body.messages = [{ role: "system", content: "You are a helpful assistant." }, ...(body.messages || [])];
     }
 
-    const data = await upstream.json();
-    return c.json(data, upstream.status as any);
+    log.req("POST", "/v1/chat/completions", `model=${modelId} msgs=${body.messages.length}`);
+
+    const upstream = await proxyRequest(modelId, body, true);
+
+    // Always stream (CodeBuddy requirement)
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      },
+    });
   });
 
   // Health
