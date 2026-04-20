@@ -25,9 +25,49 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
   // Round-robin: pick first available
   const conn = connections[0];
 
-  // Build request body — strip fields unsupported by upstream (CodeBuddy)
-  const { thinking, context_management, output_config, metadata, tools, tool_choice, ...cleanBody } = body;
-  const upstreamBody: any = { ...cleanBody, model, stream };
+  // Build request body — strip ALL fields unsupported by upstream (CodeBuddy)
+  // Assistant Code sends many Anthropic-specific fields that CodeBuddy rejects
+  // with "Parse message failed" or triggers content filter
+  const {
+    thinking,           // Anthropic extended thinking
+    context_management, // Anthropic context management
+    output_config,      // Anthropic output config (effort, task_budget, format)
+    metadata,           // Anthropic metadata (user_id with device info)
+    betas,              // Anthropic beta feature flags
+    speed,              // Anthropic speed mode ('fast')
+    system,             // Will be re-added below if valid
+    tools, tool_choice, // Handled separately below
+    ...cleanBody
+  } = body;
+
+  // Whitelist only fields CodeBuddy accepts (safer than blacklist)
+  const upstreamBody: any = {
+    model,
+    stream,
+    messages: cleanBody.messages,
+    ...(cleanBody.max_tokens && { max_tokens: cleanBody.max_tokens }),
+    ...(cleanBody.temperature !== undefined && { temperature: cleanBody.temperature }),
+    ...(cleanBody.top_p !== undefined && { top_p: cleanBody.top_p }),
+    ...(cleanBody.stop && { stop: cleanBody.stop }),
+    ...(cleanBody.presence_penalty !== undefined && { presence_penalty: cleanBody.presence_penalty }),
+    ...(cleanBody.frequency_penalty !== undefined && { frequency_penalty: cleanBody.frequency_penalty }),
+  };
+
+  // Only forward system prompt if it's a simple string or array of strings
+  // Strip attribution headers (": cc_version=...") that leak through transform
+  if (system) {
+    if (typeof system === "string") {
+      upstreamBody.system = system;
+    } else if (Array.isArray(system)) {
+      // Filter out attribution headers and empty blocks
+      const cleaned = system
+        .map((s: any) => typeof s === "string" ? s : s?.text ?? "")
+        .filter((s: string) => s && !s.match(/^:?\s*cc_/));
+      if (cleaned.length > 0) {
+        upstreamBody.system = cleaned.join("\n\n");
+      }
+    }
+  }
 
   // Only forward tools if they exist and are non-empty
   if (Array.isArray(tools) && tools.length > 0) {
