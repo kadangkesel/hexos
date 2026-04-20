@@ -30,6 +30,8 @@ const ANTHROPIC_ALIASES: Record<string, string> = {
   "claude-opus-4-5-20251101":     "cb/claude-opus-4.6",
   "claude-opus-4":                "cb/claude-opus-4.6",
   "claude-opus-4-0":              "cb/claude-opus-4.6",
+  "claude-opus-4-6":              "cb/claude-opus-4.6",
+  "claude-opus-4-6-20260101":     "cb/claude-opus-4.6",
   "claude-opus-4.5":              "cb/claude-opus-4.6",
   "claude-opus-4.6":              "cb/claude-opus-4.6",
   "claude-3-opus-20240229":       "cb/claude-opus-4.6",
