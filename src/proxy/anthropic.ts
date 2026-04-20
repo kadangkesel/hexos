@@ -64,6 +64,8 @@ export function openAIToAnthropicStream(
       const sendHeader = (inputTokens = 0) => {
         if (headerSent) return;
         headerSent = true;
+        // Anthropic SDK expects: ping → message_start → content_block_start
+        send("ping", { type: "ping" });
         send("message_start", {
           type: "message_start",
           message: {
@@ -82,7 +84,6 @@ export function openAIToAnthropicStream(
           index: 0,
           content_block: { type: "text", text: "" },
         });
-        send("ping", { type: "ping" });
       };
 
       try {

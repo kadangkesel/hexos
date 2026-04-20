@@ -68,7 +68,9 @@ export function createApp() {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
+        "Content-Encoding": "identity",
         "anthropic-version": "2023-06-01",
         "request-id": messageId,
         "x-request-id": messageId,
