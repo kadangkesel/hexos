@@ -65,7 +65,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     } else if (Array.isArray(system)) {
       systemText = system
         .map((s: any) => typeof s === "string" ? s : s?.text ?? "")
-        .filter((s: string) => s && !s.match(/^:?\s*cc_/))
+        .filter((s: string) => s && !s.match(/^:?\s*;?\s*(cc_|cch=)/))
         .join("\n\n");
     }
     if (systemText) {

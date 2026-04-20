@@ -39,14 +39,29 @@ const TEXT_RULES: ReplacementRule[] = [
     replacement: "",
   },
   {
+    label: "remove attribution line with cc_entrypoint or cch",
+    pattern: /^:?\s*;?\s*cc_entrypoint=[^\n]*$/gim,
+    replacement: "",
+  },
+  {
+    label: "remove attribution line starting with colon-semicolons",
+    pattern: /^:\s*;[^\n]*(?:cc_|cch=)[^\n]*$/gim,
+    replacement: "",
+  },
+  {
+    label: "remove cch= attribution token",
+    pattern: /\bcch=[^\s;,\n]*/gi,
+    replacement: "",
+  },
+  {
     label: "remove cc_version token",
     pattern: /cc_version=[^\s;,\n]*/gi,
     replacement: "",
   },
   {
-    label: "cc_entrypoint=cli → cc_entrypoint=app",
-    pattern: /cc_entrypoint=cli/gi,
-    replacement: "cc_entrypoint=app",
+    label: "remove cc_entrypoint token",
+    pattern: /cc_entrypoint=[^\s;,\n]*/gi,
+    replacement: "",
   },
 
   // --- Strip Anthropic / Claude Code GitHub issue links ---
