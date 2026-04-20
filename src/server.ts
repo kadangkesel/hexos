@@ -9,6 +9,15 @@ import { anthropicToOpenAI, openAIToAnthropicStream } from "./proxy/anthropic.ts
 export function createApp() {
   const app = new Hono();
 
+  // Log ALL incoming requests
+  app.use("*", async (c, next) => {
+    const method = c.req.method;
+    const path = c.req.path;
+    const ua = c.req.header("user-agent") ?? "";
+    log.req(method, path, ua.slice(0, 50));
+    await next();
+  });
+
   // Auth middleware
   app.use("/v1/*", async (c, next) => {
     const keys = getApiKeys();
@@ -111,6 +120,12 @@ export function createApp() {
 
   // Health
   app.get("/health", (c) => c.json({ status: "ok", connections: listConnections().length }));
+
+  // Catch-all: log unhandled routes
+  app.all("*", (c) => {
+    log.warn(`Unhandled: ${c.req.method} ${c.req.path}`);
+    return c.json({ error: { message: "Not found", type: "not_found" } }, 404);
+  });
 
   return app;
 }
