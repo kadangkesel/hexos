@@ -11,7 +11,9 @@ export function anthropicToOpenAI(req: any, model: string): any {
   if (req.system) {
     const systemText = typeof req.system === "string"
       ? req.system
-      : req.system.map((b: any) => b.text ?? "").join("\n");
+      : Array.isArray(req.system)
+        ? req.system.map((b: any) => b.text ?? "").join("\n")
+        : String(req.system);
     messages.push({ role: "system", content: systemText });
   } else {
     messages.push({ role: "system", content: "You are a helpful assistant." });
@@ -22,12 +24,11 @@ export function anthropicToOpenAI(req: any, model: string): any {
     if (typeof msg.content === "string") {
       messages.push({ role: msg.role, content: msg.content });
     } else if (Array.isArray(msg.content)) {
-      // Extract text blocks only (ignore image/tool blocks for now)
       const text = msg.content
         .filter((b: any) => b.type === "text")
         .map((b: any) => b.text)
         .join("\n");
-      messages.push({ role: msg.role, content: text });
+      messages.push({ role: msg.role, content: text || " " });
     }
   }
 
@@ -48,21 +49,41 @@ export function openAIToAnthropicStream(
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
-  let headerSent = false;
-  let inputTokens = 0;
-  let outputTokens = 0;
 
   return new ReadableStream({
-      async start(controller) {
+    async start(controller) {
       const reader = upstream.getReader();
       let buffer = "";
+      let headerSent = false;
+      let outputTokens = 0;
 
       const send = (event: string, data: any) => {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
 
-      // Anthropic SDK expects a ping event first
-      send("ping", { type: "ping" });
+      const sendHeader = (inputTokens = 0) => {
+        if (headerSent) return;
+        headerSent = true;
+        send("message_start", {
+          type: "message_start",
+          message: {
+            id: messageId,
+            type: "message",
+            role: "assistant",
+            content: [],
+            model,
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: inputTokens, output_tokens: 0 },
+          },
+        });
+        send("content_block_start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        });
+        send("ping", { type: "ping" });
+      };
 
       try {
         while (true) {
@@ -76,8 +97,9 @@ export function openAIToAnthropicStream(
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
             const raw = line.slice(6).trim();
+
             if (raw === "[DONE]") {
-              // Send final events
+              sendHeader(); // ensure header sent even if no content
               send("content_block_stop", { type: "content_block_stop", index: 0 });
               send("message_delta", {
                 type: "message_delta",
@@ -92,29 +114,8 @@ export function openAIToAnthropicStream(
             let chunk: any;
             try { chunk = JSON.parse(raw); } catch { continue; }
 
-            // Send message_start once
-            if (!headerSent) {
-              headerSent = true;
-              inputTokens = chunk.usage?.prompt_tokens ?? 0;
-              send("message_start", {
-                type: "message_start",
-                message: {
-                  id: messageId,
-                  type: "message",
-                  role: "assistant",
-                  content: [],
-                  model,
-                  stop_reason: null,
-                  stop_sequence: null,
-                  usage: { input_tokens: inputTokens, output_tokens: 0 },
-                },
-              });
-              send("content_block_start", {
-                type: "content_block_start",
-                index: 0,
-                content_block: { type: "text", text: "" },
-              });
-            }
+            const inputTokens = chunk.usage?.prompt_tokens ?? 0;
+            sendHeader(inputTokens);
 
             const delta = chunk.choices?.[0]?.delta;
             if (!delta) continue;
@@ -129,9 +130,8 @@ export function openAIToAnthropicStream(
               });
             }
 
-            // Track usage from final chunk
-            if (chunk.usage) {
-              outputTokens = chunk.usage.completion_tokens ?? outputTokens;
+            if (chunk.usage?.completion_tokens) {
+              outputTokens = chunk.usage.completion_tokens;
             }
           }
         }
