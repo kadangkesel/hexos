@@ -49,6 +49,15 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
 
   log.req("→", providerConfig.baseUrl, `model=${model}`);
 
+  // Debug: log outgoing request body
+  const bodyStr = JSON.stringify(upstreamBody);
+  if (process.env.DEBUG_PROXY === "1") {
+    const fs = require("fs");
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.writeFileSync(`/tmp/hexos-req-${ts}.json`, bodyStr);
+    log.info(`[DEBUG] Request body saved to /tmp/hexos-req-${ts}.json (${bodyStr.length} bytes)`);
+  }
+
   const res = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers,

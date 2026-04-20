@@ -58,14 +58,61 @@ const TEXT_RULES: ReplacementRule[] = [
 
   // --- Brand name substitutions ---
   // Apply most-specific patterns first to avoid partial replacements
+
+  // File/path references containing "claude"
   {
-    label: "Claude Code → Assistant",
-    pattern: /Claude Code/g,
+    label: "CLAUDE.md → AGENT.md",
+    pattern: /CLAUDE\.md/g,
+    replacement: "AGENT.md",
+  },
+  {
+    label: ".claude/ path → .agent/ path",
+    pattern: /\.claude\//g,
+    replacement: ".agent/",
+  },
+  {
+    label: "claude.ai URL → assistant.ai",
+    pattern: /claude\.ai/gi,
+    replacement: "assistant.ai",
+  },
+
+  // Model ID references in text (e.g. "claude-opus-4-6", "claude-sonnet-4-6")
+  {
+    label: "claude-opus model ID → opus model ID",
+    pattern: /claude-opus/gi,
+    replacement: "opus",
+  },
+  {
+    label: "claude-sonnet model ID → sonnet model ID",
+    pattern: /claude-sonnet/gi,
+    replacement: "sonnet",
+  },
+  {
+    label: "claude-haiku model ID → haiku model ID",
+    pattern: /claude-haiku/gi,
+    replacement: "haiku",
+  },
+
+  // CLI references
+  {
+    label: "claude CLI → assistant CLI",
+    pattern: /claude CLI/gi,
+    replacement: "assistant CLI",
+  },
+  {
+    label: "claude-cli user agent → assistant-cli",
+    pattern: /claude-cli/gi,
+    replacement: "assistant-cli",
+  },
+
+  {
+    label: "Assistant Code → Assistant",
+    pattern: /Assistant Code/g,
     replacement: "Assistant",
   },
   {
-    label: "Anthropic Claude → AI",
-    pattern: /Anthropic Claude/gi,
+    label: "Anthropic Assistant → AI",
+    pattern: /Anthropic Assistant/gi,
     replacement: "AI",
   },
   {
@@ -84,9 +131,16 @@ const TEXT_RULES: ReplacementRule[] = [
     replacement: "AI Provider",
   },
   {
-    label: "Claude (standalone) → Assistant",
-    pattern: /\bClaude\b/g,
+    label: "Assistant (standalone) → Assistant",
+    pattern: /\bAssistant\b/g,
     replacement: "Assistant",
+  },
+
+  // Catch remaining standalone "claude" (case-insensitive, word boundary)
+  {
+    label: "claude (standalone) → assistant",
+    pattern: /\bclaude\b/gi,
+    replacement: "assistant",
   },
 
   // --- OhMyOpenCode / third-party tool references (from community list) ---

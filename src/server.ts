@@ -60,10 +60,10 @@ export function createApp() {
     }
 
     const messageId = `msg_${Math.random().toString(36).slice(2, 18)}`;
-    const hasThinking = !!(req.thinking && req.thinking.type === "enabled");
+    const hasThinking = false; // Disabled: upstream doesn't support thinking, and fake blocks lack signature
     const openAIBody = anthropicToOpenAI(req, resolved.model);
 
-    log.req("POST", "/v1/messages", `model=${modelId} msgs=${openAIBody.messages.length} thinking=${hasThinking}`);
+    log.req("POST", "/v1/messages", `model=${modelId} msgs=${openAIBody.messages.length} thinking=${hasThinking} thinkingRaw=${JSON.stringify(req.thinking)}`);
 
     const upstream = await proxyRequest(modelId, openAIBody, true);
 
