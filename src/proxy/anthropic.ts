@@ -201,7 +201,8 @@ function convertToolChoice(tc: any): any {
 export function openAIToAnthropicStream(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  messageId: string
+  messageId: string,
+  hasThinking: boolean = false
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -212,10 +213,13 @@ export function openAIToAnthropicStream(
       let buffer = "";
       let headerSent = false;
       let outputTokens = 0;
+      let thinkingSent = false;
 
       // Content block tracking
       let textBlockOpen = false;
-      let nextBlockIndex = 0;
+      // If thinking requested, text starts at index 1 (thinking = index 0)
+      let nextBlockIndex = hasThinking ? 1 : 0;
+      const textBlockIndex = hasThinking ? 1 : 0;
 
       // tool_calls accumulator: index → {id, name, argsBuffer, blockIndex}
       const toolBlocks = new Map<number, {
@@ -250,14 +254,32 @@ export function openAIToAnthropicStream(
         });
       };
 
-      /** Open the text content_block (index 0) if not already open. */
-      const ensureTextBlock = () => {
-        if (textBlockOpen) return;
-        textBlockOpen = true;
-        nextBlockIndex = Math.max(nextBlockIndex, 1); // text is always 0
+      /** Send a fake thinking block if thinking was requested. */
+      const ensureThinkingBlock = () => {
+        if (!hasThinking || thinkingSent) return;
+        thinkingSent = true;
         send("content_block_start", {
           type: "content_block_start",
           index: 0,
+          content_block: { type: "thinking", thinking: "" },
+        });
+        send("content_block_delta", {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "thinking_delta", thinking: "..." },
+        });
+        send("content_block_stop", { type: "content_block_stop", index: 0 });
+      };
+
+      /** Open the text content_block if not already open. */
+      const ensureTextBlock = () => {
+        if (textBlockOpen) return;
+        ensureThinkingBlock();
+        textBlockOpen = true;
+        nextBlockIndex = Math.max(nextBlockIndex, textBlockIndex + 1);
+        send("content_block_start", {
+          type: "content_block_start",
+          index: textBlockIndex,
           content_block: { type: "text", text: "" },
         });
       };
@@ -266,7 +288,7 @@ export function openAIToAnthropicStream(
       const closeTextBlock = () => {
         if (!textBlockOpen) return;
         textBlockOpen = false;
-        send("content_block_stop", { type: "content_block_stop", index: 0 });
+        send("content_block_stop", { type: "content_block_stop", index: textBlockIndex });
       };
 
       /**
@@ -385,7 +407,7 @@ export function openAIToAnthropicStream(
               outputTokens++;
               send("content_block_delta", {
                 type: "content_block_delta",
-                index: 0,
+                index: textBlockIndex,
                 delta: { type: "text_delta", text: textContent },
               });
             }

@@ -60,9 +60,10 @@ export function createApp() {
     }
 
     const messageId = `msg_${Math.random().toString(36).slice(2, 18)}`;
+    const hasThinking = !!(req.thinking && req.thinking.type === "enabled");
     const openAIBody = anthropicToOpenAI(req, resolved.model);
 
-    log.req("POST", "/v1/messages", `model=${modelId} msgs=${openAIBody.messages.length}`);
+    log.req("POST", "/v1/messages", `model=${modelId} msgs=${openAIBody.messages.length} thinking=${hasThinking}`);
 
     const upstream = await proxyRequest(modelId, openAIBody, true);
 
@@ -71,7 +72,7 @@ export function createApp() {
       return c.json({ error: { message: text, type: "proxy_error" } }, upstream.status as any);
     }
 
-    const anthropicStream = openAIToAnthropicStream(upstream.body, resolved.model, messageId);
+    const anthropicStream = openAIToAnthropicStream(upstream.body, resolved.model, messageId, hasThinking);
 
     return new Response(anthropicStream, {
       status: 200,

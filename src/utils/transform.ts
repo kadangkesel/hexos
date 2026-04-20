@@ -27,15 +27,15 @@ interface ReplacementRule {
  * Order matters: rules are applied sequentially top-to-bottom.
  */
 const TEXT_RULES: ReplacementRule[] = [
-  // --- Strip billing / CLI header lines ---
+  // --- Strip billing / CLI header lines (": cc_version=...; cc_entrypoint=...; cch=...;") ---
   {
-    label: "remove x-anthropic-billing-header line",
-    pattern: /x-anthropic-billing-header:[^\n]*/gi,
+    label: "remove billing header line",
+    pattern: /^:?\s*cc_version=[^\n]*$/gim,
     replacement: "",
   },
   {
-    label: "remove x-billing-header line",
-    pattern: /x-billing-header:[^\n]*/gi,
+    label: "remove standalone billing colon line",
+    pattern: /^:\s+cc_[^\n]*$/gim,
     replacement: "",
   },
   {

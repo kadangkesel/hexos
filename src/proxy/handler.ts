@@ -25,8 +25,15 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
   // Round-robin: pick first available
   const conn = connections[0];
 
-  // Build request body
-  const upstreamBody = { ...body, model, stream };
+  // Build request body — strip fields unsupported by upstream (CodeBuddy)
+  const { thinking, context_management, output_config, metadata, tools, tool_choice, ...cleanBody } = body;
+  const upstreamBody: any = { ...cleanBody, model, stream };
+
+  // Only forward tools if they exist and are non-empty
+  if (Array.isArray(tools) && tools.length > 0) {
+    upstreamBody.tools = tools;
+    if (tool_choice) upstreamBody.tool_choice = tool_choice;
+  }
 
   // Build headers
   const headers: Record<string, string> = {
