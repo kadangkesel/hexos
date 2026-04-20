@@ -38,6 +38,8 @@ const ANTHROPIC_ALIASES: Record<string, string> = {
   "claude-sonnet-4-5":            "cb/claude-opus-4.6",
   "claude-sonnet-4-5-20251101":   "cb/claude-opus-4.6",
   "claude-sonnet-4":              "cb/claude-opus-4.6",
+  "claude-sonnet-4-6":            "cb/claude-opus-4.6",
+  "claude-sonnet-4-6-20260101":   "cb/claude-opus-4.6",
   // Haiku variants
   "claude-haiku-4-5":             "cb/claude-haiku-4.5",
   "claude-haiku-4-5-20251101":    "cb/claude-haiku-4.5",
