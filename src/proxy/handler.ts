@@ -3,6 +3,7 @@ import { refreshCodebuddy } from "../auth/oauth.ts";
 import { PROVIDERS } from "../config/providers.ts";
 import { resolveModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
+import { augmentMessages } from "../utils/transform.ts";
 
 export async function proxyRequest(modelId: string, body: any, stream: boolean): Promise<Response> {
   const resolved = resolveModel(modelId);
@@ -41,10 +42,11 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
   } = body;
 
   // Whitelist only fields CodeBuddy accepts (safer than blacklist)
+  // CodeBuddy expects system prompt INSIDE messages array, NOT as separate field
   const upstreamBody: any = {
     model,
     stream,
-    messages: cleanBody.messages,
+    messages: cleanBody.messages ?? [],
     ...(cleanBody.max_tokens && { max_tokens: cleanBody.max_tokens }),
     ...(cleanBody.temperature !== undefined && { temperature: cleanBody.temperature }),
     ...(cleanBody.top_p !== undefined && { top_p: cleanBody.top_p }),
@@ -53,21 +55,31 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     ...(cleanBody.frequency_penalty !== undefined && { frequency_penalty: cleanBody.frequency_penalty }),
   };
 
-  // Only forward system prompt if it's a simple string or array of strings
-  // Strip attribution headers (": cc_version=...") that leak through transform
+  // If there's a separate "system" field, inject it as messages[0] with role:"system"
+  // This matches how CodeBuddy CLI sends system prompts (inside messages array)
+  // Also strip attribution headers (": cc_version=...") that trigger content filter
   if (system) {
+    let systemText = "";
     if (typeof system === "string") {
-      upstreamBody.system = system;
+      systemText = system;
     } else if (Array.isArray(system)) {
-      // Filter out attribution headers and empty blocks
-      const cleaned = system
+      systemText = system
         .map((s: any) => typeof s === "string" ? s : s?.text ?? "")
-        .filter((s: string) => s && !s.match(/^:?\s*cc_/));
-      if (cleaned.length > 0) {
-        upstreamBody.system = cleaned.join("\n\n");
+        .filter((s: string) => s && !s.match(/^:?\s*cc_/))
+        .join("\n\n");
+    }
+    if (systemText) {
+      // Prepend as first message if no system message exists yet
+      const hasSystem = upstreamBody.messages.some((m: any) => m.role === "system");
+      if (!hasSystem) {
+        upstreamBody.messages.unshift({ role: "system", content: systemText });
       }
     }
   }
+
+  // Final safety: run augmentMessages on all messages to ensure
+  // brand names are transformed and system message exists
+  upstreamBody.messages = augmentMessages(upstreamBody.messages);
 
   // Only forward tools if they exist and are non-empty
   if (Array.isArray(tools) && tools.length > 0) {
@@ -75,7 +87,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     if (tool_choice) upstreamBody.tool_choice = tool_choice;
   }
 
-  // Build headers
+  // Build headers — match CodeBuddy CLI headers exactly
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${conn.accessToken}`,
@@ -86,6 +98,14 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     headers["X-User-Id"] = conn.uid;
     headers["X-Domain"] = "www.codebuddy.ai";
   }
+
+  // Add CodeBuddy-specific headers that the CLI sends
+  const requestId = Math.random().toString(36).slice(2, 18);
+  headers["X-Conversation-ID"] = `hexos_${Date.now()}`;
+  headers["X-Conversation-Request-ID"] = requestId;
+  headers["X-Conversation-Message-ID"] = requestId;
+  headers["X-Request-ID"] = requestId;
+  headers["X-Agent-Intent"] = "craft";
 
   log.req("→", providerConfig.baseUrl, `model=${model}`);
 
