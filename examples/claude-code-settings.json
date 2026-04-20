@@ -1,0 +1,8 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:1430",
+    "ANTHROPIC_AUTH_TOKEN": "your-enowx-api-key-here"
+  },
+  "hasCompletedOnboarding": true,
+  "model": "claude-opus-4-6"
+}
