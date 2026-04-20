@@ -54,6 +54,9 @@ export function resolveModel(modelId: string) {
   // Anthropic alias lookup
   const alias = ANTHROPIC_ALIASES[modelId];
   if (alias && MODEL_CATALOG[alias]) return MODEL_CATALOG[alias];
+  // Wildcard: any unknown claude-* → opus, any unknown gpt-* → gpt-5.4
+  if (modelId.startsWith("claude-")) return MODEL_CATALOG["cb/claude-opus-4.6"];
+  if (modelId.startsWith("gpt-")) return MODEL_CATALOG["cb/gpt-5.4"];
   return null;
 }
 
