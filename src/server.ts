@@ -5,6 +5,7 @@ import { listModels, resolveModel } from "./config/models.ts";
 import { listConnections } from "./auth/store.ts";
 import { log } from "./utils/logger.ts";
 import { anthropicToOpenAI, openAIToAnthropicStream } from "./proxy/anthropic.ts";
+import { augmentMessages } from "./utils/transform.ts";
 
 export function createApp() {
   const app = new Hono();
@@ -99,9 +100,7 @@ export function createApp() {
 
     // CodeBuddy requires stream=true and a system message
     body.stream = true;
-    if (!body.messages?.some((m: any) => m.role === "system")) {
-      body.messages = [{ role: "system", content: "You are a helpful assistant." }, ...(body.messages || [])];
-    }
+    body.messages = augmentMessages(body.messages ?? []);
 
     log.req("POST", "/v1/chat/completions", `model=${modelId} msgs=${body.messages.length}`);
 
