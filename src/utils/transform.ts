@@ -142,7 +142,7 @@ export function augmentMessages(messages: any[]): any[] {
 
   // Guarantee there is always at least one system message
   if (!result.some((m) => m.role === "system")) {
-    result.unshift({ role: "system", content: "You are a helpful AI coding assistant." });
+    result.unshift({ role: "system", content: "You are a helpful AI coding assistant. Always respond in the same language as the user's message." });
   }
 
   return result;

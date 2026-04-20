@@ -29,7 +29,7 @@ export function anthropicToOpenAI(req: any, model: string): any {
         : String(req.system);
     messages.push({ role: "system", content: systemText });
   } else {
-    messages.push({ role: "system", content: "You are a helpful assistant." });
+    messages.push({ role: "system", content: "You are a helpful assistant. Always respond in the same language as the user's message." });
   }
 
   // Convert messages
