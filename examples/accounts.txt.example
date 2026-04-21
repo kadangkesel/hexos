@@ -1,0 +1,31 @@
+# Hexos Multi-Account File
+#
+# Supported formats (one account per line):
+#   email|password
+#   email|password|custom_label
+#   email:password
+#   email;password
+#   email<tab>password
+#
+# Lines starting with # are ignored.
+# Each account will be logged in via Google OAuth using Camoufox browser automation.
+#
+# Usage:
+#   hexos auth batch-connect --file accounts.txt --concurrency 2
+#
+# Tips:
+# - Use app-specific passwords if 2FA is enabled on Google
+# - Keep concurrency at 2-3 to avoid Google rate limiting
+# - Set HEXOS_HEADLESS=false to debug login issues visually
+
+# Pipe delimiter (recommended)
+user1@gmail.com|password123
+user2@gmail.com|secretpass456
+user3@gmail.com|p@ssw0rd789|Production Account
+
+# Colon delimiter also works
+user4@gmail.com:mypassword
+user5@gmail.com:complex:pass:with:colons
+
+# Semicolon delimiter
+user6@gmail.com;anotherpassword

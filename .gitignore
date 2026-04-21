@@ -1,5 +1,34 @@
 node_modules/
 dist/
 .env
+.env.*
 data/
 *.log
+
+# Python automation venv
+src/automation/.venv/
+src/automation/__pycache__/
+
+# Debug files
+hexos-last-request.json
+hexos-raw-request.json
+
+# Sensitive data - never commit
+accounts.txt
+*.accounts
+~/.hexos/
+db.json
+proxies.json
+usage.json
+proxy-settings.json
+
+# Test files
+test_*.ts
+
+# Dashboard build
+dashboard/.next/
+dashboard/node_modules/
+dashboard/out/
+
+# Claude/AI config
+.claude/

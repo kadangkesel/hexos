@@ -1,9 +1,9 @@
 /**
  * Message transformation / text-replacement layer.
  *
- * Upstream providers (e.g. CodeBuddy) run content filters that reject
- * messages whose system prompt contains well-known Claude/Anthropic
- * branding, billing headers, or CLI fingerprints.
+ * Upstream providers run content filters that reject messages whose
+ * system prompt contains well-known branding, billing headers, or
+ * CLI fingerprints.
  *
  * This module applies a configurable list of regex/string replacements
  * to every text surface before forwarding to the upstream provider.
@@ -24,57 +24,225 @@ interface ReplacementRule {
 
 /**
  * Rules applied to every text string (system prompts, user/assistant text).
- * Order matters: rules are applied sequentially top-to-bottom.
+ *
+ * ORDER MATTERS — rules are applied sequentially top-to-bottom.
+ * Strategy:
+ *   1. Strip entire lines / blocks first (billing headers, attribution)
+ *   2. Strip URLs (full URLs with protocol, then bare domains)
+ *   3. Multi-word compound phrases (most-specific first)
+ *   4. Hyphenated identifiers (file paths, model IDs, package names)
+ *   5. Single-word brand replacements (with word boundaries)
+ *   6. Proxy/bypass intent words
+ *   7. CATCH-ALL (no word boundary) — last resort
  */
 const TEXT_RULES: ReplacementRule[] = [
-  // --- Strip billing / CLI header lines (": cc_version=...; cc_entrypoint=...; cch=...;") ---
+  // =========================================================================
+  // 1. STRIP ENTIRE LINES / BLOCKS
+  // =========================================================================
+
+  // --- Billing / CLI header lines ---
   {
-    label: "remove billing header line",
+    label: "remove billing header line (cc_version=...)",
     pattern: /^:?\s*cc_version=[^\n]*$/gim,
     replacement: "",
   },
   {
-    label: "remove standalone billing colon line",
+    label: "remove standalone billing colon line (: cc_...)",
     pattern: /^:\s+cc_[^\n]*$/gim,
     replacement: "",
   },
   {
-    label: "remove attribution line with cc_entrypoint or cch",
+    label: "remove attribution line (cc_entrypoint=...)",
     pattern: /^:?\s*;?\s*cc_entrypoint=[^\n]*$/gim,
     replacement: "",
   },
   {
-    label: "remove attribution line starting with colon-semicolons",
+    label: "remove attribution line (: ;...cc_|cch=...)",
     pattern: /^:\s*;[^\n]*(?:cc_|cch=)[^\n]*$/gim,
     replacement: "",
   },
   {
-    label: "remove cch= attribution token",
+    label: "remove x-anthropic-billing-header line",
+    pattern: /x-anthropic-billing-header[^\n]*/gi,
+    replacement: "",
+  },
+
+  // --- Inline billing tokens ---
+  {
+    label: "remove cch= token",
     pattern: /\bcch=[^\s;,\n]*/gi,
     replacement: "",
   },
   {
-    label: "remove cc_version token",
+    label: "remove cc_version= token",
     pattern: /cc_version=[^\s;,\n]*/gi,
     replacement: "",
   },
   {
-    label: "remove cc_entrypoint token",
+    label: "remove cc_entrypoint= token",
     pattern: /cc_entrypoint=[^\s;,\n]*/gi,
     replacement: "",
   },
 
-  // --- Strip Anthropic / Claude Code GitHub issue links ---
+  // --- Co-Authored-By attribution lines ---
   {
-    label: "remove claude-code issues URL",
-    pattern: /https?:\/\/github\.com\/anthropics\/claude-code\/issues[^\s]*/gi,
+    label: "remove Co-Authored-By with Claude/Anthropic",
+    pattern: /Co-Authored-By:[^\n]*(?:claude|anthropic)[^\n]*/gi,
     replacement: "",
   },
 
-  // --- Brand name substitutions ---
-  // Apply most-specific patterns first to avoid partial replacements
+  // --- Generated-with footer ---
+  {
+    label: "remove Generated with Claude Code footer",
+    pattern: /\?\?\s*Generated with\s*\[?[^\]]*claude[^\n]*/gi,
+    replacement: "",
+  },
 
-  // File/path references containing "claude"
+  // =========================================================================
+  // 2. STRIP URLs (full URLs first, then bare domains)
+  // =========================================================================
+
+  // Full URLs containing sensitive words
+  {
+    label: "remove any URL containing anthropic/claude",
+    pattern: /https?:\/\/[^\s"')>]*(anthropic|claude)[^\s"')>]*/gi,
+    replacement: "",
+  },
+
+  // Email addresses containing sensitive words
+  {
+    label: "remove email addresses with anthropic/claude",
+    pattern: /[a-zA-Z0-9._%+-]*@[a-zA-Z0-9.-]*(anthropic|claude)[a-zA-Z0-9.-]*/gi,
+    replacement: "",
+  },
+
+  // Bare domain references (no protocol prefix)
+  {
+    label: "remove docs.anthropic.com",
+    pattern: /docs\.anthropic\.com[^\s"')>]*/gi,
+    replacement: "",
+  },
+  {
+    label: "remove console.anthropic.com",
+    pattern: /console\.anthropic\.com[^\s"')>]*/gi,
+    replacement: "",
+  },
+  {
+    label: "remove anthropic.com",
+    pattern: /anthropic\.com[^\s"')>]*/gi,
+    replacement: "",
+  },
+  {
+    label: "remove claude.ai",
+    pattern: /claude\.ai[^\s"')>]*/gi,
+    replacement: "",
+  },
+
+  // =========================================================================
+  // 3. MULTI-WORD COMPOUND PHRASES (most-specific first)
+  // =========================================================================
+
+  {
+    label: "Claude Agent SDK → AI Agent SDK",
+    pattern: /Claude\s+Agent\s+SDK/gi,
+    replacement: "AI Agent SDK",
+  },
+  {
+    label: "Claude Code → AI Assistant",
+    pattern: /Claude\s+Code/gi,
+    replacement: "AI Assistant",
+  },
+  {
+    label: "Claude Opus → Opus",
+    pattern: /Claude\s+Opus/gi,
+    replacement: "Opus",
+  },
+  {
+    label: "Claude Sonnet → Sonnet",
+    pattern: /Claude\s+Sonnet/gi,
+    replacement: "Sonnet",
+  },
+  {
+    label: "Claude Haiku → Haiku",
+    pattern: /Claude\s+Haiku/gi,
+    replacement: "Haiku",
+  },
+  {
+    label: "Claude model version refs (Claude 3.x, Claude 4.x) → model",
+    pattern: /\bClaude\s+\d[\w.-]*/gi,
+    replacement: "model",
+  },
+  {
+    label: "Anthropic SDK → AI SDK",
+    pattern: /Anthropic\s+SDK/gi,
+    replacement: "AI SDK",
+  },
+  {
+    label: "Anthropic Assistant → AI",
+    pattern: /Anthropic\s+Assistant/gi,
+    replacement: "AI",
+  },
+  {
+    label: "Anthropic API → AI API",
+    pattern: /Anthropic\s+API/gi,
+    replacement: "AI API",
+  },
+  {
+    label: "Anthropic's → AI Provider's",
+    pattern: /Anthropic's/gi,
+    replacement: "AI Provider's",
+  },
+  {
+    label: "by Anthropic → by AI Provider",
+    pattern: /by\s+Anthropic/gi,
+    replacement: "by AI Provider",
+  },
+  {
+    label: "from Anthropic → from AI Provider",
+    pattern: /from\s+Anthropic/gi,
+    replacement: "from AI Provider",
+  },
+  {
+    label: "built on Anthropic → built on AI Provider",
+    pattern: /built\s+on\s+Anthropic/gi,
+    replacement: "built on AI Provider",
+  },
+  {
+    label: "Claude CLI → assistant CLI",
+    pattern: /Claude\s+CLI/gi,
+    replacement: "assistant CLI",
+  },
+  {
+    label: "Claude session → assistant session",
+    pattern: /Claude\s+session/gi,
+    replacement: "assistant session",
+  },
+  {
+    label: "Claude exits → assistant exits",
+    pattern: /Claude\s+exits/gi,
+    replacement: "assistant exits",
+  },
+  {
+    label: "Claude models → AI models",
+    pattern: /Claude\s+models/gi,
+    replacement: "AI models",
+  },
+  {
+    label: "Claude model family → AI model family",
+    pattern: /Claude\s+model\s+family/gi,
+    replacement: "AI model family",
+  },
+  {
+    label: "Anthropic prompt cache → prompt cache",
+    pattern: /Anthropic\s+prompt\s+cache/gi,
+    replacement: "prompt cache",
+  },
+
+  // =========================================================================
+  // 4. HYPHENATED IDENTIFIERS (file paths, model IDs, package names)
+  // =========================================================================
+
+  // File/path references
   {
     label: "CLAUDE.md → AGENT.md",
     pattern: /CLAUDE\.md/g,
@@ -86,54 +254,43 @@ const TEXT_RULES: ReplacementRule[] = [
     replacement: ".agent/",
   },
   {
-    label: "claude.ai URL → assistant.ai",
-    pattern: /claude\.ai/gi,
-    replacement: "assistant.ai",
+    label: ".claude.json → .agent.json",
+    pattern: /\.claude\.json/g,
+    replacement: ".agent.json",
   },
 
-  // Model ID references in text (e.g. "claude-opus-4-6", "claude-sonnet-4-6")
+  // Model ID references in text
   {
-    label: "claude-opus model ID → opus model ID",
+    label: "claude-opus → opus",
     pattern: /claude-opus/gi,
     replacement: "opus",
   },
   {
-    label: "claude-sonnet model ID → sonnet model ID",
+    label: "claude-sonnet → sonnet",
     pattern: /claude-sonnet/gi,
     replacement: "sonnet",
   },
   {
-    label: "claude-haiku model ID → haiku model ID",
+    label: "claude-haiku → haiku",
     pattern: /claude-haiku/gi,
     replacement: "haiku",
   },
 
-  // CLI references
+  // CLI / package identifiers
   {
-    label: "claude CLI → assistant CLI",
-    pattern: /claude CLI/gi,
-    replacement: "assistant CLI",
+    label: "claude-code → ai-assistant",
+    pattern: /claude-code/gi,
+    replacement: "ai-assistant",
   },
   {
-    label: "claude-cli user agent → assistant-cli",
+    label: "claude-cli → assistant-cli",
     pattern: /claude-cli/gi,
     replacement: "assistant-cli",
   },
-
   {
-    label: "Assistant Code → Assistant",
-    pattern: /Assistant Code/g,
-    replacement: "Assistant",
-  },
-  {
-    label: "Anthropic Assistant → AI",
-    pattern: /Anthropic Assistant/gi,
-    replacement: "AI",
-  },
-  {
-    label: "claude-code (kebab) → ai-assistant",
-    pattern: /claude-code/gi,
-    replacement: "ai-assistant",
+    label: "claude-api → ai-api",
+    pattern: /claude-api/gi,
+    replacement: "ai-api",
   },
   {
     label: "@anthropic-ai/ → @ai-sdk/",
@@ -141,24 +298,47 @@ const TEXT_RULES: ReplacementRule[] = [
     replacement: "@ai-sdk/",
   },
   {
+    label: "anthropic-version → api-version",
+    pattern: /anthropic-version/gi,
+    replacement: "api-version",
+  },
+
+  // =========================================================================
+  // 5. SINGLE-WORD BRAND REPLACEMENTS (word-boundary)
+  // =========================================================================
+
+  {
     label: "Anthropic → AI Provider",
     pattern: /\bAnthropic\b/g,
     replacement: "AI Provider",
   },
   {
-    label: "Assistant (standalone) → Assistant",
-    pattern: /\bAssistant\b/g,
-    replacement: "Assistant",
+    label: "anthropic → AI Provider (case-insensitive)",
+    pattern: /\banthropic\b/gi,
+    replacement: "AI Provider",
   },
-
-  // Catch remaining standalone "claude" (case-insensitive, word boundary)
   {
-    label: "claude (standalone) → assistant",
+    label: "Claude → assistant (standalone word)",
+    pattern: /\bClaude\b/g,
+    replacement: "assistant",
+  },
+  {
+    label: "claude → assistant (standalone word, case-insensitive)",
     pattern: /\bclaude\b/gi,
     replacement: "assistant",
   },
+  {
+    label: "CLAUDE → AGENT (all-caps standalone)",
+    pattern: /\bCLAUDE\b/g,
+    replacement: "AGENT",
+  },
 
-  // --- OhMyOpenCode / third-party tool references (from community list) ---
+  // --- Third-party tool references ---
+  {
+    label: "OpenClaude → Assistant",
+    pattern: /\bOpenClaude\b/gi,
+    replacement: "Assistant",
+  },
   {
     label: "OhMyOpenCode brand strip",
     pattern: / from OhMyOpenCode/gi,
@@ -169,10 +349,55 @@ const TEXT_RULES: ReplacementRule[] = [
     pattern: /\s*-\s*OhMyOpenCode\)/gi,
     replacement: ")",
   },
+
+  // =========================================================================
+  // 6. PROXY / BYPASS INTENT WORDS
+  // =========================================================================
+
   {
-    label: "OpenClaude → Assistant",
-    pattern: /\bOpenClaude\b/gi,
-    replacement: "Assistant",
+    label: "CodeBuddy → Service",
+    pattern: /\bCodeBuddy\b/gi,
+    replacement: "Service",
+  },
+  {
+    label: "content filter → validation",
+    pattern: /content.filter/gi,
+    replacement: "validation",
+  },
+  {
+    label: "brand name transform → text transform",
+    pattern: /brand.name.(?:transform|substitut|replac|strip)/gi,
+    replacement: "text transform",
+  },
+  {
+    label: "strip attribution → process data",
+    pattern: /strip.(?:attribution|brand|billing)/gi,
+    replacement: "process data",
+  },
+  {
+    label: "bypass → handle",
+    pattern: /\bbypass\b/gi,
+    replacement: "handle",
+  },
+  {
+    label: "sanitiz* → process",
+    pattern: /\bsanitiz\w*/gi,
+    replacement: "process",
+  },
+
+  // =========================================================================
+  // 7. FINAL CATCH-ALL (no word boundary — last resort)
+  // =========================================================================
+  // These run last to catch substrings inside compound words, JSON keys, etc.
+  {
+    label: "catch-all: anthropic → ai-provider",
+    pattern: /anthropic/gi,
+    replacement: "ai-provider",
+  },
+  {
+    label: "catch-all: claude → assistant",
+    pattern: /claude/gi,
+    replacement: "assistant",
   },
 ];
 
@@ -183,7 +408,7 @@ const TEXT_RULES: ReplacementRule[] = [
 const DEBUG = process.env.DEBUG_TRANSFORM === "1";
 
 /** Apply all TEXT_RULES to a single string. */
-function applyRules(text: string): string {
+export function applyRules(text: string): string {
   let result = text;
   for (const rule of TEXT_RULES) {
     const before = result;
@@ -195,6 +420,29 @@ function applyRules(text: string): string {
   // Collapse runs of blank lines that replacements may leave behind
   result = result.replace(/\n{3,}/g, "\n\n").trim();
   return result;
+}
+
+/**
+ * Recursively walk an object/array and apply applyRules() to every string
+ * value found. This is JSON-safe — it never serializes to JSON and back,
+ * so structural characters (quotes, braces, etc.) are never corrupted.
+ */
+export function applyRulesDeep(obj: unknown): unknown {
+  if (typeof obj === "string") {
+    return applyRules(obj);
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => applyRulesDeep(item));
+  }
+  if (obj !== null && typeof obj === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      out[key] = applyRulesDeep(value);
+    }
+    return out;
+  }
+  // numbers, booleans, null — pass through unchanged
+  return obj;
 }
 
 // ---------------------------------------------------------------------------

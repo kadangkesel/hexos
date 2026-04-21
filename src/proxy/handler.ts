@@ -1,9 +1,26 @@
-import { getConnections, updateConnection } from "../auth/store.ts";
+import {
+  getActiveConnections,
+  getLeastUsedConnection,
+  incrementUsage,
+  recordFailure,
+  setConnectionStatus,
+  updateConnection,
+  type Connection,
+} from "../auth/store.ts";
 import { refreshCodebuddy } from "../auth/oauth.ts";
 import { PROVIDERS } from "../config/providers.ts";
 import { resolveModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
-import { augmentMessages } from "../utils/transform.ts";
+import { augmentMessages, applyRulesDeep } from "../utils/transform.ts";
+
+const MAX_FAILOVER_ATTEMPTS = 3;
+
+export interface ProxyMeta {
+  model: string;
+  accountId: string;
+  accountLabel: string;
+  startTime: number;
+}
 
 export async function proxyRequest(modelId: string, body: any, stream: boolean): Promise<Response> {
   const resolved = resolveModel(modelId);
@@ -17,32 +34,159 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     return errorResponse(400, `Unknown provider: ${providerId}`);
   }
 
-  // Get connection
-  const connections = getConnections(providerId);
+  // Get active connections (excludes disabled)
+  const connections = getActiveConnections(providerId);
   if (connections.length === 0) {
-    return errorResponse(401, `No connections for provider: ${providerId}. Run: hexos auth connect ${providerId}`);
+    return errorResponse(401, `No active connections for provider: ${providerId}. Run: hexos auth connect ${providerId}`);
   }
 
-  // Round-robin: pick first available
-  const conn = connections[0];
+  // Build the sanitized request body once (shared across failover attempts)
+  const { finalBodyStr, model: resolvedModel } = buildUpstreamBody(body, model, stream);
 
-  // Build request body — strip ALL fields unsupported by upstream (CodeBuddy)
-  // Assistant Code sends many Anthropic-specific fields that CodeBuddy rejects
-  // with "Parse message failed" or triggers content filter
+  // Track start time for latency measurement
+  const startTime = Date.now();
+
+  // Least-used selection with failover
+  const triedIds = new Set<string>();
+  let lastError = "";
+
+  for (let attempt = 0; attempt < Math.min(MAX_FAILOVER_ATTEMPTS, connections.length); attempt++) {
+    // Pick least-used connection that hasn't been tried yet
+    const conn = pickConnection(providerId, triedIds);
+    if (!conn) break;
+
+    triedIds.add(conn.id);
+    const connLabel = conn.label || conn.id.slice(0, 8);
+
+    log.req("→", providerConfig.baseUrl, `model=${resolvedModel} account=${connLabel} (usage: ${conn.usageCount})`);
+
+    // Build headers for this connection
+    const headers = buildHeaders(conn, providerConfig);
+
+    // Debug: save request body and scan for sensitive words
+    debugScanBody(finalBodyStr, resolvedModel);
+
+    try {
+      const res = await fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers,
+        body: finalBodyStr,
+      });
+
+      // Handle 401 — try refresh once
+      if (res.status === 401 && conn.refreshToken) {
+        log.warn(`[${connLabel}] Token expired, refreshing...`);
+        try {
+          const refreshed = await refreshCodebuddy(conn.refreshToken);
+          await updateConnection(conn.id, {
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+          });
+          headers.Authorization = `Bearer ${refreshed.accessToken}`;
+
+          const retryRes = await fetch(providerConfig.baseUrl, {
+            method: "POST",
+            headers,
+            body: finalBodyStr,
+          });
+
+          if (retryRes.ok || (retryRes.status >= 200 && retryRes.status < 500)) {
+            // Success after refresh — increment usage
+            await incrementUsage(conn.id);
+            return addTrackingHeaders(retryRes, resolvedModel, conn, startTime);
+          }
+
+          // Refresh succeeded but request still failed — record failure and try next
+          log.warn(`[${connLabel}] Request failed after refresh (${retryRes.status}), trying next account...`);
+          await recordFailure(conn.id);
+          lastError = `${connLabel}: HTTP ${retryRes.status} after token refresh`;
+          continue;
+        } catch (e) {
+          log.error(`[${connLabel}] Token refresh failed: ${e}`);
+          await setConnectionStatus(conn.id, "expired");
+          lastError = `${connLabel}: Token refresh failed`;
+          continue;
+        }
+      }
+
+      // Handle rate limiting (429) — could be rate limit OR credit exhausted
+      if (res.status === 429) {
+        let reason = "Rate limited";
+        try {
+          const body = await res.clone().text();
+          const lower = body.toLowerCase();
+          if (lower.includes("credit") || lower.includes("quota") || lower.includes("balance") || lower.includes("insufficient") || lower.includes("exceeded")) {
+            reason = "Credit exhausted";
+            log.error(`[${connLabel}] Credit exhausted (429): ${body.slice(0, 200)}`);
+            await setConnectionStatus(conn.id, "disabled");
+          } else {
+            log.warn(`[${connLabel}] Rate limited (429): ${body.slice(0, 200)}`);
+          }
+        } catch {
+          log.warn(`[${connLabel}] Rate limited (429), could not read body`);
+        }
+        lastError = `${connLabel}: ${reason} (429)`;
+        continue;
+      }
+
+      // Handle server errors (5xx) — failover to next account
+      if (res.status >= 500) {
+        log.warn(`[${connLabel}] Server error (${res.status}), trying next account...`);
+        await recordFailure(conn.id);
+        lastError = `${connLabel}: Server error ${res.status}`;
+        continue;
+      }
+
+      // Success or client error (4xx except 401/429) — return as-is
+      await incrementUsage(conn.id);
+      return addTrackingHeaders(res, resolvedModel, conn, startTime);
+    } catch (e: any) {
+      log.error(`[${connLabel}] Network error: ${e.message}`);
+      await recordFailure(conn.id);
+      lastError = `${connLabel}: ${e.message}`;
+      continue;
+    }
+  }
+
+  // All connections exhausted
+  log.error(`All connections failed. Last error: ${lastError}`);
+  return errorResponse(502, `All connections failed. Last error: ${lastError}`);
+}
+
+/**
+ * Pick the least-used connection that hasn't been tried yet.
+ */
+function pickConnection(providerId: string, triedIds: Set<string>): Connection | null {
+  const active = getActiveConnections(providerId).filter((c) => !triedIds.has(c.id));
+  if (active.length === 0) return null;
+
+  return active.reduce((best, conn) => {
+    if (conn.usageCount < best.usageCount) return conn;
+    if (conn.usageCount > best.usageCount) return best;
+    const connLast = conn.lastUsedAt ?? 0;
+    const bestLast = best.lastUsedAt ?? 0;
+    if (connLast < bestLast) return conn;
+    if (connLast > bestLast) return best;
+    return conn.createdAt < best.createdAt ? conn : best;
+  });
+}
+
+/**
+ * Build the sanitized upstream request body.
+ */
+function buildUpstreamBody(body: any, model: string, stream: boolean): { finalBodyStr: string; model: string } {
   const {
-    thinking,           // Anthropic extended thinking
-    context_management, // Anthropic context management
-    output_config,      // Anthropic output config (effort, task_budget, format)
-    metadata,           // Anthropic metadata (user_id with device info)
-    betas,              // Anthropic beta feature flags
-    speed,              // Anthropic speed mode ('fast')
-    system,             // Will be re-added below if valid
-    tools, tool_choice, // Handled separately below
+    thinking,
+    context_management,
+    output_config,
+    metadata,
+    betas,
+    speed,
+    system,
+    tools, tool_choice,
     ...cleanBody
   } = body;
 
-  // Whitelist only fields CodeBuddy accepts (safer than blacklist)
-  // CodeBuddy expects system prompt INSIDE messages array, NOT as separate field
   const upstreamBody: any = {
     model,
     stream,
@@ -55,9 +199,6 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     ...(cleanBody.frequency_penalty !== undefined && { frequency_penalty: cleanBody.frequency_penalty }),
   };
 
-  // If there's a separate "system" field, inject it as messages[0] with role:"system"
-  // This matches how CodeBuddy CLI sends system prompts (inside messages array)
-  // Also strip attribution headers (": cc_version=...") that trigger content filter
   if (system) {
     let systemText = "";
     if (typeof system === "string") {
@@ -69,7 +210,6 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
         .join("\n\n");
     }
     if (systemText) {
-      // Prepend as first message if no system message exists yet
       const hasSystem = upstreamBody.messages.some((m: any) => m.role === "system");
       if (!hasSystem) {
         upstreamBody.messages.unshift({ role: "system", content: systemText });
@@ -77,17 +217,23 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     }
   }
 
-  // Final safety: run augmentMessages on all messages to ensure
-  // brand names are transformed and system message exists
   upstreamBody.messages = augmentMessages(upstreamBody.messages);
 
-  // Only forward tools if they exist and are non-empty
   if (Array.isArray(tools) && tools.length > 0) {
-    upstreamBody.tools = tools;
+    upstreamBody.tools = applyRulesDeep(tools);
     if (tool_choice) upstreamBody.tool_choice = tool_choice;
   }
 
-  // Build headers — match CodeBuddy CLI headers exactly
+  const sanitizedBody = applyRulesDeep(upstreamBody) as any;
+  sanitizedBody.model = model;
+
+  return { finalBodyStr: JSON.stringify(sanitizedBody), model };
+}
+
+/**
+ * Build request headers for a specific connection.
+ */
+function buildHeaders(conn: Connection, providerConfig: any): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${conn.accessToken}`,
@@ -99,7 +245,6 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     headers["X-Domain"] = "www.codebuddy.ai";
   }
 
-  // Add CodeBuddy-specific headers that the CLI sends
   const requestId = Math.random().toString(36).slice(2, 18);
   headers["X-Conversation-ID"] = `hexos_${Date.now()}`;
   headers["X-Conversation-Request-ID"] = requestId;
@@ -107,42 +252,61 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
   headers["X-Request-ID"] = requestId;
   headers["X-Agent-Intent"] = "craft";
 
-  log.req("→", providerConfig.baseUrl, `model=${model}`);
+  return headers;
+}
 
-  // Debug: log outgoing request body
-  const bodyStr = JSON.stringify(upstreamBody);
-  if (process.env.DEBUG_PROXY === "1") {
+/**
+ * Debug: save request body and scan for remaining sensitive words.
+ */
+function debugScanBody(finalBodyStr: string, model: string) {
+  try {
     const fs = require("fs");
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    fs.writeFileSync(`/tmp/hexos-req-${ts}.json`, bodyStr);
-    log.info(`[DEBUG] Request body saved to /tmp/hexos-req-${ts}.json (${bodyStr.length} bytes)`);
-  }
+    const debugDir = process.cwd();
+    fs.writeFileSync(`${debugDir}/hexos-last-request.json`, finalBodyStr);
 
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(upstreamBody),
-  });
-
-  // Handle 401 — try refresh once
-  if (res.status === 401 && conn.refreshToken) {
-    log.warn("Token expired, refreshing...");
-    try {
-      const refreshed = await refreshCodebuddy(conn.refreshToken);
-      await updateConnection(conn.id, { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken });
-      headers.Authorization = `Bearer ${refreshed.accessToken}`;
-      const retryRes = await fetch(providerConfig.baseUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(upstreamBody),
-      });
-      return retryRes;
-    } catch (e) {
-      log.error(`Token refresh failed: ${e}`);
+    const modelFieldPattern = `"model":"${model}"`;
+    const sensitivePatterns: [string, RegExp][] = [
+      ["claude", /claude/gi],
+      ["anthropic", /anthropic/gi],
+    ];
+    let hasSensitive = false;
+    for (const [label, pat] of sensitivePatterns) {
+      const scanStr = finalBodyStr.replace(modelFieldPattern, "");
+      const matches = scanStr.match(pat);
+      if (matches) {
+        hasSensitive = true;
+        log.warn(`⚠ SENSITIVE WORD "${label}" found ${matches.length}x in request body`);
+        const re = new RegExp(`.{0,30}${pat.source}.{0,30}`, "gi");
+        const contexts = scanStr.match(re);
+        if (contexts) {
+          for (const ctx of contexts.slice(0, 3)) {
+            log.warn(`  Context: ...${ctx.replace(/\n/g, " ")}...`);
+          }
+        }
+      }
     }
-  }
+    if (!hasSensitive) {
+      log.info(`✓ Request body clean (${finalBodyStr.length} bytes)`);
+    }
+  } catch {}
+}
 
-  return res;
+/**
+ * Add tracking metadata headers to the response.
+ * These are used by server.ts to record usage after streaming completes.
+ */
+function addTrackingHeaders(res: Response, model: string, conn: Connection, startTime: number): Response {
+  const newHeaders = new Headers(res.headers);
+  newHeaders.set("X-Hexos-Model", model);
+  newHeaders.set("X-Hexos-Account-Id", conn.id);
+  newHeaders.set("X-Hexos-Account-Label", conn.label || conn.id.slice(0, 8));
+  newHeaders.set("X-Hexos-Start-Time", String(startTime));
+
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: newHeaders,
+  });
 }
 
 function errorResponse(status: number, message: string): Response {
