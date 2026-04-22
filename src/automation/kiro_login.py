@@ -520,7 +520,7 @@ async def run_login(email: str, password: str):
         manager = AsyncCamoufox(**camoufox_kwargs)
         browser = await manager.__aenter__()
         page = await browser.new_page()
-        page.set_default_timeout(15000)
+        page.set_default_timeout(20000)
 
         # Step 4: Intercept kiro:// redirect to capture auth code
         auth_code = None
@@ -538,28 +538,52 @@ async def run_login(email: str, password: str):
             except Exception:
                 pass
 
+        # Listen for response redirects (captures kiro:// from Location header)
         page.on("response", on_response)
 
+        # Step 5: Navigate to Kiro auth (BEFORE setting up route handler)
+        progress("navigate", f"Navigating to Kiro auth page...")
+        debug(f"Auth URL: {auth_url[:100]}...")
+        try:
+            await page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as nav_exc:
+            # Retry once — proxy may need warm-up
+            debug(f"First navigation failed: {nav_exc}, retrying...")
+            progress("navigate_retry", "Navigation failed, retrying...")
+            await asyncio.sleep(2.0)
+            try:
+                await page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as nav_exc2:
+                result_failure(f"Navigation failed: {nav_exc2}")
+                return
+        await asyncio.sleep(2.0)
+
+        # Also intercept navigation requests to kiro:// scheme
+        # (browser tries to navigate there after OAuth completes)
         async def route_handler(route):
             nonlocal auth_code
             if auth_code:
-                await route.continue_()
+                try:
+                    await route.continue_()
+                except Exception:
+                    pass
                 return
             request_url = route.request.url
             code = extract_code_from_kiro_url(request_url)
             if code:
                 auth_code = code
                 debug(f"Auth code captured from route: {code[:20]}...")
-                await route.abort()
+                try:
+                    await route.abort()
+                except Exception:
+                    pass
                 return
-            await route.continue_()
+            try:
+                await route.continue_()
+            except Exception:
+                pass
 
         await page.route("**/*", route_handler)
-
-        # Step 5: Navigate to Kiro auth
-        progress("navigate", "Navigating to Kiro auth page...")
-        await page.goto(auth_url, wait_until="domcontentloaded", timeout=20000)
-        await asyncio.sleep(2.0)
 
         # Step 6: Auth loop — automate Google login
         progress("auth_loop", "Automating Google login...")
