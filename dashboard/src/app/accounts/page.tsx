@@ -810,7 +810,7 @@ function FilterUnconnectedSection() {
 /* ------------------------------------------------------------------ */
 
 export default function AccountsPage() {
-  const { connections, loading, error, fetch, enable, disable, checkToken, checkAllCredits, removeExhausted, exportData, importData, remove } =
+  const { connections, loading, error, fetch, enable, disable, checkToken, checkAllCredits, removeExhausted, removeExpired, removeBanned, exportData, importData, remove } =
     useConnectionsStore();
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -919,6 +919,32 @@ export default function AccountsPage() {
                 >
                   {checkingCredits ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                   Check Credits
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                  onClick={async () => {
+                    const removed = await removeExpired();
+                    if (removed > 0) toast.success(`Removed ${removed} invalid token accounts`);
+                    else toast("No invalid token accounts");
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Remove Invalid
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-destructive/50 text-destructive hover:bg-destructive/10"
+                  onClick={async () => {
+                    const removed = await removeBanned();
+                    if (removed > 0) toast.success(`Removed ${removed} banned accounts`);
+                    else toast("No banned accounts");
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Remove Banned
                 </Button>
                 <Button
                   variant="outline"

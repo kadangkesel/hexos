@@ -58,6 +58,8 @@ export interface ConnectionsState {
   checkToken: (id: string) => Promise<void>;
   checkAllCredits: () => Promise<void>;
   removeExhausted: () => Promise<number>;
+  removeExpired: () => Promise<number>;
+  removeBanned: () => Promise<number>;
   exportData: () => Promise<unknown>;
   importData: (data: unknown) => Promise<{ imported: number; skipped: number } | null>;
   batchConnect: (req: BatchConnectRequest) => Promise<string>;
@@ -171,6 +173,32 @@ export const useConnectionsStore = create<ConnectionsState>()((set, get) => ({
     try {
       const { removed } = await apiFetch<{ removed: number }>(
         "/api/connections/remove-exhausted",
+        { method: "POST" },
+      );
+      if (removed > 0) await get().fetch();
+      return removed;
+    } catch {
+      return 0;
+    }
+  },
+
+  removeExpired: async () => {
+    try {
+      const { removed } = await apiFetch<{ removed: number }>(
+        "/api/connections/remove-expired",
+        { method: "POST" },
+      );
+      if (removed > 0) await get().fetch();
+      return removed;
+    } catch {
+      return 0;
+    }
+  },
+
+  removeBanned: async () => {
+    try {
+      const { removed } = await apiFetch<{ removed: number }>(
+        "/api/connections/remove-banned",
         { method: "POST" },
       );
       if (removed > 0) await get().fetch();

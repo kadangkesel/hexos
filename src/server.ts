@@ -655,10 +655,40 @@ export function createApp() {
     let removed = 0;
     for (const conn of conns) {
       const credit = conn.credit as { remainingCredits?: number } | undefined;
-      const isExhausted = conn.status === "disabled" || (credit && (credit.remainingCredits ?? 0) <= 0);
+      const isExhausted = conn.status === "disabled" && credit && (credit.remainingCredits ?? 0) <= 0;
       if (isExhausted) {
         await removeConnection(conn.id);
         removed++;
+      }
+    }
+    return c.json({ removed });
+  });
+
+  // --- Remove expired (token invalid) connections ---
+  app.post("/api/connections/remove-expired", async (c) => {
+    const conns = listConnections();
+    let removed = 0;
+    for (const conn of conns) {
+      if (conn.status === "expired") {
+        await removeConnection(conn.id);
+        removed++;
+      }
+    }
+    return c.json({ removed });
+  });
+
+  // --- Remove banned/suspended (disabled with remaining credit) connections ---
+  app.post("/api/connections/remove-banned", async (c) => {
+    const conns = listConnections();
+    let removed = 0;
+    for (const conn of conns) {
+      if (conn.status === "disabled") {
+        const credit = conn.credit as { remainingCredits?: number } | undefined;
+        const hasCredit = (credit?.remainingCredits ?? -1) !== 0;
+        if (hasCredit) {
+          await removeConnection(conn.id);
+          removed++;
+        }
       }
     }
     return c.json({ removed });
