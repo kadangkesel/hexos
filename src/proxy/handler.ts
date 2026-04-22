@@ -148,11 +148,25 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
         continue;
       }
 
-      // Handle 403 — forbidden / gateway block — failover
+      // Handle 403 — forbidden / suspended / gateway block — failover
       if (res.status === 403) {
-        log.warn(`[${connLabel}] Forbidden (403), trying next account...`);
-        await recordFailure(conn.id);
-        lastError = `${connLabel}: Forbidden (403)`;
+        let reason = "Forbidden";
+        try {
+          const body403 = await res.clone().text();
+          const lower = body403.toLowerCase();
+          if (lower.includes("suspended") || lower.includes("locked") || lower.includes("banned")) {
+            reason = "Account suspended";
+            log.error(`[${connLabel}] Account suspended (403): ${body403.slice(0, 200)}`);
+            await setConnectionStatus(conn.id, "disabled");
+          } else {
+            log.warn(`[${connLabel}] Forbidden (403): ${body403.slice(0, 200)}`);
+            await recordFailure(conn.id);
+          }
+        } catch {
+          log.warn(`[${connLabel}] Forbidden (403), trying next account...`);
+          await recordFailure(conn.id);
+        }
+        lastError = `${connLabel}: ${reason} (403)`;
         continue;
       }
 
