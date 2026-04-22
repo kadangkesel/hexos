@@ -1204,9 +1204,17 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
             # Check if we landed on any CodeBuddy authenticated page
             # (home, profile, dashboard, etc. — means login worked)
             if on_codebuddy and not on_codebuddy_region and not current_path.startswith("/login"):
-                codebuddy_auth_pages = ["", "/", "/home", "/started", "/profile", "/dashboard", "/index.html"]
+                codebuddy_auth_pages = ["", "/", "/home", "/profile", "/dashboard", "/index.html"]
                 if current_path in codebuddy_auth_pages or current_path.rstrip("/") in codebuddy_auth_pages:
                     progress("auth_complete", f"Authentication successful (landed on {current_path or '/'})!")
+                    # Navigate to /started to signal the server that auth is complete
+                    # This makes the token available at the poll endpoint
+                    started_url = f"{CODEBUDDY_BASE_URL}/started?platform={CODEBUDDY_PLATFORM}&state={state}"
+                    try:
+                        progress("signal_server", "Signaling server for token...")
+                        await page.goto(started_url, wait_until="domcontentloaded", timeout=10000)
+                    except Exception as exc:
+                        debug(f"Navigate to /started failed: {exc}")
                     auth_success = True
                     break
 
