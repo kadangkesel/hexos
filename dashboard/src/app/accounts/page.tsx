@@ -52,7 +52,21 @@ import {
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function getStatus(conn: Connection): "active" | "exhausted" {
+type ConnectionStatus = "active" | "expired" | "suspended" | "exhausted";
+
+function getStatus(conn: Connection): ConnectionStatus {
+  // Check backend status first (set by token validation / proxy handler)
+  const backendStatus = String((conn as any).status || "active");
+  if (backendStatus === "expired") return "expired";
+  if (backendStatus === "disabled") {
+    // Distinguish between credit exhausted and suspended/banned
+    const credit = conn.credit as Record<string, unknown> | undefined;
+    const remaining = Number(credit?.remainingCredits ?? -1);
+    if (remaining === 0) return "exhausted";
+    return "suspended";
+  }
+
+  // Check credit
   const credit = conn.credit as Record<string, unknown> | undefined;
   const remaining = Number(credit?.remainingCredits ?? -1);
   if (remaining === 0) return "exhausted";
@@ -63,9 +77,25 @@ function isActive(conn: Connection): boolean {
   return getStatus(conn) === "active";
 }
 
-const STATUS_BADGE_VARIANT: Record<string, "default" | "destructive"> = {
+const STATUS_BADGE_VARIANT: Record<ConnectionStatus, "default" | "destructive" | "secondary" | "outline"> = {
   active: "default",
+  expired: "outline",
+  suspended: "destructive",
   exhausted: "destructive",
+};
+
+const STATUS_BADGE_CLASS: Record<ConnectionStatus, string> = {
+  active: "",
+  expired: "border-amber-500/50 text-amber-600 dark:text-amber-400 bg-amber-500/10",
+  suspended: "border-red-500/30 bg-red-500/10",
+  exhausted: "",
+};
+
+const STATUS_LABEL: Record<ConnectionStatus, string> = {
+  active: "active",
+  expired: "token invalid",
+  suspended: "banned",
+  exhausted: "exhausted",
 };
 
 function formatDate(d?: string | null): string {
@@ -121,12 +151,17 @@ function AccountRow({ conn, onToggle, onCheck, onRemove, busy }: AccountRowProps
         <div className="flex items-center gap-1.5">
           {conn.label ?? conn.email}
           <Badge variant="outline" className="text-[9px] font-mono shrink-0">
-            {String((conn as any).provider || "codebuddy")}
+            {({ codebuddy: "CB", cline: "CL", kiro: "KR" } as Record<string, string>)[String((conn as any).provider)] || String((conn as any).provider)}
           </Badge>
         </div>
       </TableCell>
       <TableCell>
-        <Badge variant={STATUS_BADGE_VARIANT[status]}>{status}</Badge>
+        <Badge
+          variant={STATUS_BADGE_VARIANT[status]}
+          className={STATUS_BADGE_CLASS[status]}
+        >
+          {STATUS_LABEL[status]}
+        </Badge>
       </TableCell>
       <TableCell className="text-right">{usageCount ?? 0}</TableCell>
       <TableCell className="text-right text-xs text-muted-foreground">
