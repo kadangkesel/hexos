@@ -397,60 +397,52 @@ export async function batchConnect(
 
   log.info(`Batch connecting ${accounts.length} accounts (concurrency: ${concurrency}, providers: ${providers.join(", ")})...`);
 
-  // Process in batches of `concurrency`
-  for (let i = 0; i < accounts.length; i += concurrency) {
-    // Check cancel
-    if (isCancelled?.()) {
-      log.warn("Batch connect cancelled by user");
-      break;
-    }
+  // Worker pool pattern: each worker grabs the next account as soon as it finishes.
+  // No more waiting for the slowest account in a batch.
+  let nextIndex = 0;
 
-    const batch = accounts.slice(i, i + concurrency);
-    const batchNum = Math.floor(i / concurrency) + 1;
-    const totalBatches = Math.ceil(accounts.length / concurrency);
+  async function worker(workerId: number) {
+    while (true) {
+      if (isCancelled?.()) break;
 
-    log.info(`Batch ${batchNum}/${totalBatches} (${batch.length} accounts):`);
+      // Grab next account atomically
+      const idx = nextIndex++;
+      if (idx >= accounts.length) break;
 
-    const promises = batch.map(async (account, idx) => {
+      const account = accounts[idx];
       const label = account.label || account.email;
-      // Pick a random proxy from the pool
       const proxy = getRandomProxy?.() ?? undefined;
       if (proxy) log.info(`[${label}] Using proxy: ${proxy}`);
-      // Stagger starts slightly to avoid hitting rate limits
-      if (idx > 0) await Bun.sleep(2000 * idx);
 
-      const providerResults: { provider: string; success: boolean; error?: string }[] = [];
-
-      for (const provider of providers) {
-        if (isCancelled?.()) break;
-        if (provider === "codebuddy") {
-          const r = await oauthCodebuddyAutomated(account.email, account.password, label, proxy, headless);
-          providerResults.push({ provider: "codebuddy", ...r });
-        } else if (provider === "kiro") {
-          const r = await oauthKiroAutomated(account.email, account.password, label, proxy, headless);
-          providerResults.push({ provider: "kiro", ...r });
-        } else if (provider === "cline") {
-          const r = await oauthClineAutomated(account.email, account.password, label, proxy, headless);
-          providerResults.push({ provider: "cline", ...r });
-        }
+      // Stagger first wave slightly
+      if (idx > 0 && idx < concurrency) {
+        await Bun.sleep(2000 * (idx % concurrency));
       }
 
-      return providerResults;
-    });
+      log.info(`[${idx + 1}/${accounts.length}] ${label} (worker ${workerId + 1})`);
 
-    const batchResults = await Promise.allSettled(promises);
+      try {
+        const providerResults: { provider: string; success: boolean; error?: string }[] = [];
 
-    for (let j = 0; j < batchResults.length; j++) {
-      const r = batchResults[j];
-      const account = batch[j];
-      if (r.status === "fulfilled") {
-        const providerResults = r.value;
+        for (const provider of providers) {
+          if (isCancelled?.()) break;
+          if (provider === "codebuddy") {
+            const r = await oauthCodebuddyAutomated(account.email, account.password, label, proxy, headless);
+            providerResults.push({ provider: "codebuddy", ...r });
+          } else if (provider === "kiro") {
+            const r = await oauthKiroAutomated(account.email, account.password, label, proxy, headless);
+            providerResults.push({ provider: "kiro", ...r });
+          } else if (provider === "cline") {
+            const r = await oauthClineAutomated(account.email, account.password, label, proxy, headless);
+            providerResults.push({ provider: "cline", ...r });
+          }
+        }
+
         const allSucceeded = providerResults.length > 0 && providerResults.every((pr) => pr.success);
         const anySucceeded = providerResults.some((pr) => pr.success);
         if (allSucceeded) {
           results.success++;
         } else if (anySucceeded) {
-          // Partial success — count as success but log errors for failed providers
           results.success++;
           for (const pr of providerResults) {
             if (!pr.success) {
@@ -463,21 +455,22 @@ export async function batchConnect(
             results.errors.push(`${account.email} [${pr.provider}]: ${pr.error || "Unknown error"}`);
           }
         }
-      } else {
+      } catch (e: any) {
         results.failed++;
-        results.errors.push(`${account.email}: ${r.reason?.message || "Unknown error"}`);
+        results.errors.push(`${account.email}: ${e.message || "Unknown error"}`);
       }
-    }
 
-    // Report incremental progress
-    onProgress?.(results.success + results.failed, results.success, results.failed);
+      // Report progress after each account
+      onProgress?.(results.success + results.failed, results.success, results.failed);
 
-    // Wait between batches to avoid rate limiting
-    if (i + concurrency < accounts.length) {
-      log.info("Waiting 5s before next batch...");
-      await Bun.sleep(5000);
+      // Small delay between accounts per worker to avoid rate limiting
+      await Bun.sleep(2000);
     }
   }
+
+  // Spawn workers
+  const workers = Array.from({ length: Math.min(concurrency, accounts.length) }, (_, i) => worker(i));
+  await Promise.all(workers);
 
   return results;
 }
