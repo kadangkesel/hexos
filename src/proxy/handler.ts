@@ -7,11 +7,13 @@ import {
   updateConnection,
   type Connection,
 } from "../auth/store.ts";
-import { refreshCodebuddy, refreshCline } from "../auth/oauth.ts";
+import { refreshCodebuddy, refreshCline, refreshKiro } from "../auth/oauth.ts";
 import { PROVIDERS } from "../config/providers.ts";
 import { resolveModel, getUpstreamModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
 import { augmentMessages, applyRulesDeep } from "../utils/transform.ts";
+import { openaiToKiro } from "./kiro-transform.ts";
+import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
 
 // Try ALL active connections before giving up.
 // Previously capped at 3, but with 100+ accounts we want full rotation.
@@ -43,8 +45,18 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     return errorResponse(401, `No active connections for provider: ${providerId}. Run: hexos auth connect ${providerId}`);
   }
 
+  // Kiro uses a completely different request/response format
+  const isKiro = providerConfig.format === "kiro";
+
   // Build the sanitized request body once (shared across failover attempts)
-  const { finalBodyStr, model: resolvedModel } = buildUpstreamBody(body, model, stream);
+  // For Kiro, we defer body building until we have the connection (need profileArn)
+  let finalBodyStr: string | null = null;
+  let resolvedModel = model;
+  if (!isKiro) {
+    const built = buildUpstreamBody(body, model, stream);
+    finalBodyStr = built.finalBodyStr;
+    resolvedModel = built.model;
+  }
 
   // Track start time for latency measurement
   const startTime = Date.now();
@@ -63,17 +75,26 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
 
     log.req("→", providerConfig.baseUrl, `model=${resolvedModel} account=${connLabel} (usage: ${conn.usageCount})`);
 
+    // For Kiro: build body per-connection (needs profileArn from conn.uid)
+    let requestBody: string;
+    if (isKiro) {
+      const profileArn = conn.uid || "";
+      const kiroBody = openaiToKiro(body, model, profileArn);
+      requestBody = JSON.stringify(kiroBody);
+      debugScanBody(requestBody, resolvedModel);
+    } else {
+      requestBody = finalBodyStr!;
+      debugScanBody(requestBody, resolvedModel);
+    }
+
     // Build headers for this connection
     const headers = buildHeaders(conn, providerConfig);
-
-    // Debug: save request body and scan for sensitive words
-    debugScanBody(finalBodyStr, resolvedModel);
 
     try {
       const res = await fetch(providerConfig.baseUrl, {
         method: "POST",
         headers,
-        body: finalBodyStr,
+        body: requestBody,
       });
 
       // Handle 401 — try refresh, then failover
@@ -81,25 +102,30 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
         if (conn.refreshToken) {
           log.warn(`[${connLabel}] Token expired, refreshing...`);
           try {
-            const refreshed = conn.provider === "cline"
-              ? await refreshCline(conn.refreshToken)
-              : await refreshCodebuddy(conn.refreshToken);
+            const refreshed = conn.provider === "kiro"
+              ? await refreshKiro(conn.refreshToken)
+              : conn.provider === "cline"
+                ? await refreshCline(conn.refreshToken)
+                : await refreshCodebuddy(conn.refreshToken);
             await updateConnection(conn.id, {
               accessToken: refreshed.accessToken,
               refreshToken: refreshed.refreshToken,
             });
-            headers.Authorization = providerConfig.authFormat === "workos"
-              ? `Bearer workos:${refreshed.accessToken}`
-              : `Bearer ${refreshed.accessToken}`;
+            headers.Authorization = `Bearer ${refreshed.accessToken}`;
 
+            // Rebuild Kiro body with new token (profileArn unchanged)
             const retryRes = await fetch(providerConfig.baseUrl, {
               method: "POST",
               headers,
-              body: finalBodyStr,
+              body: requestBody,
             });
 
             if (retryRes.ok || (retryRes.status >= 200 && retryRes.status < 400)) {
               await incrementUsage(conn.id);
+              // Kiro: convert EventStream → OpenAI SSE
+              if (isKiro) {
+                return await handleKiroResponse(retryRes, resolvedModel, conn, startTime, stream);
+              }
               return addTrackingHeaders(retryRes, resolvedModel, conn, startTime);
             }
 
@@ -158,8 +184,14 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
         continue;
       }
 
-      // Success (2xx) or benign client error (400, 404, 422) — return as-is
+      // Success (2xx) or benign client error (400, 404, 422)
       await incrementUsage(conn.id);
+
+      // Kiro: convert EventStream binary → OpenAI SSE/JSON
+      if (isKiro && res.ok) {
+        return await handleKiroResponse(res, resolvedModel, conn, startTime, stream);
+      }
+
       return addTrackingHeaders(res, resolvedModel, conn, startTime);
     } catch (e: any) {
       log.error(`[${connLabel}] Network error: ${e.message}`);
@@ -254,13 +286,44 @@ function buildUpstreamBody(body: any, model: string, stream: boolean): { finalBo
 }
 
 /**
+ * Handle Kiro response: convert AWS EventStream binary to OpenAI format.
+ */
+async function handleKiroResponse(
+  res: Response,
+  model: string,
+  conn: Connection,
+  startTime: number,
+  stream: boolean,
+): Promise<Response> {
+  if (stream) {
+    const { response, usagePromise } = kiroToOpenAIStream(res, model);
+    // Fire-and-forget: log usage when stream completes
+    usagePromise.then(({ promptTokens, completionTokens }) => {
+      const elapsed = Date.now() - startTime;
+      const connLabel = conn.label || conn.id.slice(0, 8);
+      log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
+    }).catch(() => {});
+    return addTrackingHeaders(response, model, conn, startTime);
+  } else {
+    const { response, promptTokens, completionTokens } = await kiroToOpenAINonStream(res, model);
+    const elapsed = Date.now() - startTime;
+    const connLabel = conn.label || conn.id.slice(0, 8);
+    log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
+    return addTrackingHeaders(response, model, conn, startTime);
+  }
+}
+
+/**
  * Build request headers for a specific connection.
  */
 function buildHeaders(conn: Connection, providerConfig: any): Record<string, string> {
   // Check provider's auth format
-  const authHeader = providerConfig.authFormat === "workos"
-    ? `Bearer workos:${conn.accessToken}`
-    : `Bearer ${conn.accessToken}`;
+  let authHeader: string;
+  if (providerConfig.authFormat === "workos") {
+    authHeader = `Bearer workos:${conn.accessToken}`;
+  } else {
+    authHeader = `Bearer ${conn.accessToken}`;
+  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -273,12 +336,20 @@ function buildHeaders(conn: Connection, providerConfig: any): Record<string, str
     headers["X-Domain"] = "www.codebuddy.ai";
   }
 
-  const requestId = Math.random().toString(36).slice(2, 18);
-  headers["X-Conversation-ID"] = `hexos_${Date.now()}`;
-  headers["X-Conversation-Request-ID"] = requestId;
-  headers["X-Conversation-Message-ID"] = requestId;
-  headers["X-Request-ID"] = requestId;
-  headers["X-Agent-Intent"] = "craft";
+  // Kiro-specific headers
+  if (providerConfig.format === "kiro") {
+    const crypto = require("crypto");
+    headers["Amz-Sdk-Request"] = "attempt=1; max=3";
+    headers["Amz-Sdk-Invocation-Id"] = crypto.randomUUID();
+  } else {
+    // Standard headers for non-Kiro providers
+    const requestId = Math.random().toString(36).slice(2, 18);
+    headers["X-Conversation-ID"] = `hexos_${Date.now()}`;
+    headers["X-Conversation-Request-ID"] = requestId;
+    headers["X-Conversation-Message-ID"] = requestId;
+    headers["X-Request-ID"] = requestId;
+    headers["X-Agent-Intent"] = "craft";
+  }
 
   return headers;
 }

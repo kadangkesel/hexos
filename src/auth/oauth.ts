@@ -17,6 +17,7 @@ const VENV_PYTHON = process.platform === "win32"
   : join(AUTOMATION_DIR, ".venv", "bin", "python");
 const LOGIN_SCRIPT = join(AUTOMATION_DIR, "login.py");
 const CLINE_LOGIN_SCRIPT = join(AUTOMATION_DIR, "cline_login.py");
+const KIRO_LOGIN_SCRIPT = join(AUTOMATION_DIR, "kiro_login.py");
 
 // Track active automation subprocesses for cleanup on cancel
 export const activeProcs = new Set<{ kill: () => void }>();
@@ -425,6 +426,9 @@ export async function batchConnect(
         if (provider === "codebuddy") {
           const r = await oauthCodebuddyAutomated(account.email, account.password, label, proxy, headless);
           providerResults.push({ provider: "codebuddy", ...r });
+        } else if (provider === "kiro") {
+          const r = await oauthKiroAutomated(account.email, account.password, label, proxy, headless);
+          providerResults.push({ provider: "kiro", ...r });
         } else if (provider === "cline") {
           const r = await oauthClineAutomated(account.email, account.password, label, proxy, headless);
           providerResults.push({ provider: "cline", ...r });
@@ -670,6 +674,239 @@ export async function checkClineToken(accessToken: string): Promise<{ valid: boo
     if (!res.ok) return { valid: false };
     const data = await res.json() as any;
     return { valid: true, uid: data.id, email: data.email };
+  } catch {
+    return { valid: false };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Kiro: automated OAuth via browser automation (Camoufox)
+// ---------------------------------------------------------------------------
+
+interface KiroLoginResult {
+  type: "progress" | "result" | "error" | "debug";
+  step?: string;
+  message?: string;
+  success?: boolean;
+  accessToken?: string;
+  refreshToken?: string;
+  profileArn?: string;
+  error?: string;
+  credit?: {
+    totalCredits: number;
+    remainingCredits: number;
+    usedCredits: number;
+    packageName: string;
+    expiresAt: string;
+  };
+}
+
+export async function oauthKiroAutomated(
+  email: string,
+  password: string,
+  label?: string,
+  proxy?: string,
+  headless = true,
+): Promise<{ success: boolean; error?: string }> {
+  const accountLabel = label || email;
+
+  if (!isAutomationReady()) {
+    log.error("Automation not set up. Run: hexos auth setup-automation");
+    return { success: false, error: "Automation not set up" };
+  }
+
+  log.info(`[${accountLabel}] Launching Kiro browser automation...`);
+
+  const proc = Bun.spawn(
+    [VENV_PYTHON, KIRO_LOGIN_SCRIPT, "--email", email, "--password", password],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        HEXOS_DEBUG: process.env.HEXOS_DEBUG || "false",
+        ...(proxy ? { HEXOS_PROXY: proxy, HTTP_PROXY: proxy, HTTPS_PROXY: proxy } : {}),
+        HEXOS_HEADLESS: headless ? "true" : "false",
+      },
+    },
+  );
+  activeProcs.add(proc);
+
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: KiroLoginResult | null = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg: KiroLoginResult = JSON.parse(line);
+          if (msg.type === "progress") {
+            log.info(`[${accountLabel}] ${msg.message}`);
+          } else if (msg.type === "result") {
+            finalResult = msg;
+            const hasAccess = !!msg.accessToken;
+            const hasRefresh = !!msg.refreshToken;
+            log.info(`[${accountLabel}] Result: success=${msg.success} accessToken=${hasAccess ? 'present' : 'EMPTY'} refreshToken=${hasRefresh ? 'present' : 'EMPTY'} profileArn=${msg.profileArn ? 'present' : 'EMPTY'}`);
+          } else if (msg.type === "error") {
+            log.error(`[${accountLabel}] ${msg.error}`);
+          } else if (msg.type === "debug") {
+            log.info(`[${accountLabel}] [debug] ${msg.message}`);
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
+  if (buffer.trim()) {
+    try {
+      const msg: KiroLoginResult = JSON.parse(buffer);
+      if (msg.type === "result") finalResult = msg;
+    } catch {}
+  }
+
+  const exitCode = await proc.exited;
+  activeProcs.delete(proc);
+
+  let stderrText = "";
+  try {
+    const stderrReader = proc.stderr.getReader();
+    const { value } = await stderrReader.read();
+    if (value) stderrText = decoder.decode(value);
+  } catch {}
+
+  if (exitCode !== 0 && !finalResult) {
+    const errMsg = stderrText.trim() || `Process exited with code ${exitCode}`;
+    log.error(`[${accountLabel}] Kiro automation failed: ${errMsg}`);
+    return { success: false, error: errMsg };
+  }
+
+  if (!finalResult || !finalResult.success) {
+    const errMsg = finalResult?.error || "Unknown Kiro automation error";
+    log.error(`[${accountLabel}] Kiro login failed: ${errMsg}`);
+    return { success: false, error: errMsg };
+  }
+
+  // Reject results with empty tokens
+  if (!finalResult.accessToken) {
+    log.error(`[${accountLabel}] Kiro login succeeded in browser but no token obtained. Skipping save.`);
+    return { success: false, error: "No accessToken obtained from Kiro login" };
+  }
+
+  if (!finalResult.refreshToken) {
+    log.warn(`[${accountLabel}] WARNING: Kiro accessToken present but refreshToken is EMPTY.`);
+  }
+
+  // Save connection as "kiro" provider
+  // Store profileArn in uid field (reuse existing field)
+  const conn = await saveConnection({
+    provider: "kiro",
+    label: accountLabel,
+    accessToken: finalResult.accessToken,
+    refreshToken: finalResult.refreshToken || "",
+    uid: finalResult.profileArn || "",
+  });
+
+  // Save credit info
+  if (finalResult.credit) {
+    const { updateConnection } = await import("./store.ts");
+    await updateConnection(conn.id, {
+      credit: {
+        ...finalResult.credit,
+        fetchedAt: Date.now(),
+      },
+    });
+  }
+
+  log.ok(`[${accountLabel}] Kiro connected!`);
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Kiro: token refresh
+// ---------------------------------------------------------------------------
+
+export async function refreshKiro(refreshToken: string): Promise<{ accessToken: string; refreshToken: string }> {
+  const res = await fetch("https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refreshToken }),
+  });
+  if (!res.ok) throw new Error(`Kiro token refresh failed: ${res.status}`);
+  const data = await res.json() as any;
+  return {
+    accessToken: data.accessToken || "",
+    refreshToken: data.refreshToken || refreshToken,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Kiro: token verification (uses usage API as health check)
+// ---------------------------------------------------------------------------
+
+export async function checkKiroToken(accessToken: string, profileArn?: string): Promise<{ valid: boolean; usage?: any }> {
+  try {
+    // Use the usage/quota endpoint as a token validity check
+    const params = new URLSearchParams({
+      origin: "AI_EDITOR",
+      resourceType: "AGENTIC_REQUEST",
+    });
+    if (profileArn) params.set("profileArn", profileArn);
+
+    const res = await fetch(`https://q.us-east-1.amazonaws.com/getUsageLimits?${params}`, {
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "User-Agent": "kiro-ide/1.0.0",
+      },
+    });
+
+    if (res.status === 401 || res.status === 403) return { valid: false };
+    if (!res.ok) return { valid: false };
+
+    const data = await res.json() as any;
+    const usageList = data?.usageBreakdownList ?? [];
+    if (usageList.length === 0) return { valid: true };
+
+    const usage = usageList[0] ?? {};
+    const limit = Number(usage.usageLimitWithPrecision ?? usage.usageLimit ?? 0);
+    const current = Number(usage.currentUsageWithPrecision ?? usage.currentUsage ?? 0);
+
+    // Add free trial
+    const freeTrial = usage.freeTrialInfo ?? {};
+    let totalLimit = limit;
+    let totalUsage = current;
+    if (String(freeTrial.freeTrialStatus ?? "").toUpperCase() === "ACTIVE") {
+      totalLimit += Number(freeTrial.usageLimitWithPrecision ?? freeTrial.usageLimit ?? 0);
+      totalUsage += Number(freeTrial.currentUsageWithPrecision ?? freeTrial.currentUsage ?? 0);
+    }
+
+    // Add bonuses
+    for (const bonus of usage.bonuses ?? []) {
+      totalLimit += Number(bonus?.usageLimit ?? 0);
+      totalUsage += Number(bonus?.currentUsage ?? 0);
+    }
+
+    const remaining = Math.max(totalLimit - totalUsage, 0);
+    const subTitle = data?.subscriptionInfo?.subscriptionTitle ?? data?.subscriptionType ?? "Free";
+
+    return {
+      valid: true,
+      usage: {
+        totalCredits: totalLimit,
+        remainingCredits: remaining,
+        usedCredits: totalUsage,
+        packageName: subTitle,
+        expiresAt: data?.nextDateReset ?? "",
+      },
+    };
   } catch {
     return { valid: false };
   }

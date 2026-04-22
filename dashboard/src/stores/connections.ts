@@ -21,7 +21,7 @@ export interface BatchConnectRequest {
   accounts: { email: string; password: string; label?: string }[];
   concurrency?: number;
   headless?: boolean;
-  providers?: string[];  // ["codebuddy", "cline"] - which providers to login to
+  providers?: string[];  // ["codebuddy", "cline", "kiro"] - which providers to login to
 }
 
 export interface BatchTaskLog {

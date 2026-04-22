@@ -7,7 +7,7 @@ import { log } from "./utils/logger.ts";
 import { anthropicToOpenAI, openAIToAnthropicStream } from "./proxy/anthropic.ts";
 import { augmentMessages } from "./utils/transform.ts";
 import { createUsageTrackingStream, recordUsage, getStats, getRecords } from "./tracking/tracker.ts";
-import { batchConnect, isAutomationReady, checkToken } from "./auth/oauth.ts";
+import { batchConnect, isAutomationReady, checkToken, checkKiroToken } from "./auth/oauth.ts";
 import { PROVIDERS } from "./config/providers.ts";
 import { detectTools, bindTool, unbindTool, readToolConfig } from "./integration/tools.ts";
 import { getProxies, addProxy, batchAddProxies, removeProxy, removeDeadProxies, removeAllProxies, checkProxy, checkAllProxies } from "./proxy/pool.ts";
@@ -390,6 +390,27 @@ export function createApp() {
       return c.json({ valid: true, uid, balance, credit: { totalCredits: balance, remainingCredits: balance } });
     }
     
+    // Kiro
+    if (conn.provider === "kiro") {
+      const kiroStatus = await checkKiroToken(conn.accessToken, conn.uid);
+      
+      if (!kiroStatus.valid) {
+        log.warn(`[Check] ${conn.label} (Kiro) token invalid — marking expired`);
+        await setConnectionStatus(conn.id, "expired");
+        return c.json({ valid: false, expired: true, reason: "token_invalid" });
+      }
+      
+      // Update credit from usage data
+      if (kiroStatus.usage) {
+        await updateConnection(conn.id, {
+          credit: { ...kiroStatus.usage, fetchedAt: Date.now() },
+        });
+      }
+      if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+      
+      return c.json({ valid: true, credit: kiroStatus.usage });
+    }
+    
     // CodeBuddy
     const status = await checkToken(conn.accessToken);
     
@@ -547,6 +568,24 @@ export function createApp() {
           status = {
             valid: true,
             credit: { totalCredits: balance, remainingCredits: balance, usedCredits: 0, packageName: "Cline", expiresAt: "" },
+          };
+        } else if (conn.provider === "kiro") {
+          // Kiro: check token + fetch usage
+          const kiroStatus = await checkKiroToken(conn.accessToken, conn.uid);
+          
+          if (!kiroStatus.valid) {
+            if (conn.status !== "expired") {
+              await setConnectionStatus(conn.id, "expired");
+              expiredCount++;
+              log.warn(`[Check credits] ${conn.label} (Kiro) token invalid — marked expired`);
+            }
+            results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
+            return;
+          }
+          
+          status = {
+            valid: true,
+            credit: kiroStatus.usage ?? undefined,
           };
         } else {
           // CodeBuddy

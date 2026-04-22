@@ -1,4 +1,4 @@
-export type ProviderFormat = "openai" | "anthropic" | "gemini";
+export type ProviderFormat = "openai" | "anxthxropic" | "gemini" | "kiro";
 
 export interface ProviderConfig {
   id: string;
@@ -6,7 +6,7 @@ export interface ProviderConfig {
   format: ProviderFormat;
   baseUrl: string;
   authType: "oauth" | "apikey";
-  authFormat?: "bearer" | "workos"; // default "bearer"
+  authFormat?: "bearer" | "workos" | "kiro"; // default "bearer"
   headers?: Record<string, string>;
 }
 
@@ -40,6 +40,20 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       "X-Platform": "Cline CLI - Node.js",
       "X-Client-Type": "CLI",
       "X-Core-Version": "3.79.0",
+    },
+  },
+  kiro: {
+    id: "kiro",
+    name: "Kiro",
+    format: "kiro",
+    baseUrl: "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
+    authType: "oauth",
+    authFormat: "kiro",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/vnd.amazon.eventstream",
+      "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
+      "User-Agent": "AWS-SDK-JS/3.0 kiro-ide/1.0.0",
     },
   },
   openai: {

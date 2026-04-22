@@ -346,6 +346,19 @@ function BatchAddSection() {
               />
               <span>Cline</span>
             </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={providers.includes("kiro")}
+                onChange={(e) => {
+                  if (e.target.checked) setProviders(p => [...p, "kiro"]);
+                  else setProviders(p => p.filter(x => x !== "kiro"));
+                }}
+                disabled={isRunning}
+                className="rounded"
+              />
+              <span>Kiro</span>
+            </label>
           </div>
 
           <div className="flex flex-wrap items-end gap-4">
@@ -475,7 +488,7 @@ function FilterUnconnectedSection() {
     useConnectionsStore();
 
   const [text, setText] = useState("");
-  const [provider, setProvider] = useState<"codebuddy" | "cline">("cline");
+  const [provider, setProvider] = useState<"codebuddy" | "cline" | "kiro">("cline");
   const [concurrency, setConcurrency] = useState(2);
   const [headless, setHeadless] = useState(true);
 
@@ -589,7 +602,7 @@ function FilterUnconnectedSection() {
           <div className="flex items-center gap-3">
             <Label className="text-xs text-muted-foreground shrink-0">Provider:</Label>
             <div className="flex gap-1.5">
-              {(["codebuddy", "cline"] as const).map((p) => (
+              {(["codebuddy", "cline", "kiro"] as const).map((p) => (
                 <Button
                   key={p}
                   variant={provider === p ? "default" : "outline"}
@@ -597,7 +610,7 @@ function FilterUnconnectedSection() {
                   className="h-7 text-xs px-3"
                   onClick={() => setProvider(p)}
                 >
-                  {p === "codebuddy" ? "CodeBuddy" : "Cline"}
+                  {p === "codebuddy" ? "CodeBuddy" : p === "cline" ? "Cline" : "Kiro"}
                   <Badge variant="secondary" className="ml-1.5 text-[9px] px-1 py-0">
                     {connectedEmails.get(p)?.size ?? 0}
                   </Badge>
@@ -636,7 +649,7 @@ function FilterUnconnectedSection() {
             <div className="rounded-md border border-border overflow-hidden">
               <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b border-border">
                 <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                  Unconnected to {provider === "codebuddy" ? "CodeBuddy" : "Cline"} ({parsed.missing.length})
+                  Unconnected to {provider === "codebuddy" ? "CodeBuddy" : provider === "cline" ? "Cline" : "Kiro"} ({parsed.missing.length})
                 </span>
               </div>
               <div className="max-h-[200px] overflow-y-auto">
