@@ -851,9 +851,9 @@ export async function refreshKiro(refreshToken: string): Promise<{ accessToken: 
 // Kiro: token verification (uses usage API as health check)
 // ---------------------------------------------------------------------------
 
-export async function checkKiroToken(accessToken: string, profileArn?: string): Promise<{ valid: boolean; usage?: any }> {
+export async function checkKiroToken(accessToken: string, profileArn?: string): Promise<{ valid: boolean; suspended?: boolean; usage?: any }> {
   try {
-    // Use the usage/quota endpoint as a token validity check
+    // Step 1: Check usage/quota API for token validity + credit info
     const params = new URLSearchParams({
       origin: "AI_EDITOR",
       resourceType: "AGENTIC_REQUEST",
@@ -868,10 +868,72 @@ export async function checkKiroToken(accessToken: string, profileArn?: string): 
       },
     });
 
-    if (res.status === 401 || res.status === 403) return { valid: false };
+    if (res.status === 401) return { valid: false };
+    if (res.status === 403) {
+      // Check if suspended
+      try {
+        const body = await res.text();
+        if (body.toLowerCase().includes("suspended") || body.toLowerCase().includes("locked")) {
+          return { valid: false, suspended: true };
+        }
+      } catch {}
+      return { valid: false };
+    }
     if (!res.ok) return { valid: false };
 
     const data = await res.json() as any;
+
+    // Step 2: Probe chat API to detect suspended accounts
+    // (usage API returns 200 even for suspended accounts)
+    try {
+      const probeRes = await fetch("https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/vnd.amazon.eventstream",
+          "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
+          "User-Agent": "AWS-SDK-JS/3.0 kiro-ide/1.0.0",
+          "Authorization": `Bearer ${accessToken}`,
+          "Amz-Sdk-Request": "attempt=1; max=3",
+          "Amz-Sdk-Invocation-Id": crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          conversationState: {
+            chatTriggerType: "MANUAL",
+            conversationId: crypto.randomUUID(),
+            currentMessage: {
+              userInputMessage: {
+                content: "hi",
+                modelId: "claude-haiku-4.5",
+                origin: "AI_EDITOR",
+              },
+            },
+            history: [],
+          },
+          profileArn: profileArn || "arn:aws:codewhisperer:us-east-1:63861613270:profile/AAACCXX",
+          inferenceConfig: { maxTokens: 1 },
+        }),
+      });
+
+      if (probeRes.status === 403) {
+        try {
+          const probeBody = await probeRes.text();
+          const lower = probeBody.toLowerCase();
+          if (lower.includes("suspended") || lower.includes("locked") || lower.includes("banned")) {
+            log.warn(`[Kiro check] Account suspended: ${probeBody.slice(0, 150)}`);
+            return { valid: false, suspended: true };
+          }
+        } catch {}
+        return { valid: false, suspended: true };
+      }
+      // If probe succeeds (200) or returns other errors (400, 429), account is not suspended
+      // Abort the response body to avoid consuming the stream
+      try { probeRes.body?.cancel(); } catch {}
+    } catch {
+      // Network error on probe — don't fail the whole check, just skip
+    }
+
+    // Step 3: Parse usage data
     const usageList = data?.usageBreakdownList ?? [];
     if (usageList.length === 0) return { valid: true };
 

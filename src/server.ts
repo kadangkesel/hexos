@@ -395,6 +395,11 @@ export function createApp() {
       const kiroStatus = await checkKiroToken(conn.accessToken, conn.uid);
       
       if (!kiroStatus.valid) {
+        if (kiroStatus.suspended) {
+          log.warn(`[Check] ${conn.label} (Kiro) account suspended — marking disabled`);
+          await setConnectionStatus(conn.id, "disabled");
+          return c.json({ valid: false, suspended: true, reason: "account_suspended" });
+        }
         log.warn(`[Check] ${conn.label} (Kiro) token invalid — marking expired`);
         await setConnectionStatus(conn.id, "expired");
         return c.json({ valid: false, expired: true, reason: "token_invalid" });
@@ -570,16 +575,25 @@ export function createApp() {
             credit: { totalCredits: balance, remainingCredits: balance, usedCredits: 0, packageName: "Cline", expiresAt: "" },
           };
         } else if (conn.provider === "kiro") {
-          // Kiro: check token + fetch usage
+          // Kiro: check token + fetch usage + detect suspended
           const kiroStatus = await checkKiroToken(conn.accessToken, conn.uid);
           
           if (!kiroStatus.valid) {
-            if (conn.status !== "expired") {
-              await setConnectionStatus(conn.id, "expired");
-              expiredCount++;
-              log.warn(`[Check credits] ${conn.label} (Kiro) token invalid — marked expired`);
+            if (kiroStatus.suspended) {
+              if (conn.status !== "disabled") {
+                await setConnectionStatus(conn.id, "disabled");
+                expiredCount++;
+                log.warn(`[Check credits] ${conn.label} (Kiro) account suspended — marked disabled`);
+              }
+              results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "account_suspended" });
+            } else {
+              if (conn.status !== "expired") {
+                await setConnectionStatus(conn.id, "expired");
+                expiredCount++;
+                log.warn(`[Check credits] ${conn.label} (Kiro) token invalid — marked expired`);
+              }
+              results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
             }
-            results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
             return;
           }
           
