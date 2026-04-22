@@ -7,13 +7,15 @@ import {
   updateConnection,
   type Connection,
 } from "../auth/store.ts";
-import { refreshCodebuddy } from "../auth/oauth.ts";
+import { refreshCodebuddy, refreshCline } from "../auth/oauth.ts";
 import { PROVIDERS } from "../config/providers.ts";
-import { resolveModel } from "../config/models.ts";
+import { resolveModel, getUpstreamModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
 import { augmentMessages, applyRulesDeep } from "../utils/transform.ts";
 
-const MAX_FAILOVER_ATTEMPTS = 3;
+// Try ALL active connections before giving up.
+// Previously capped at 3, but with 100+ accounts we want full rotation.
+const MAX_FAILOVER_ATTEMPTS = Infinity;
 
 export interface ProxyMeta {
   model: string;
@@ -28,7 +30,8 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     return errorResponse(400, `Unknown model: ${modelId}`);
   }
 
-  const { provider: providerId, model } = resolved;
+  const { provider: providerId } = resolved;
+  const model = getUpstreamModel(resolved);
   const providerConfig = PROVIDERS[providerId];
   if (!providerConfig) {
     return errorResponse(400, `Unknown provider: ${providerId}`);
@@ -73,40 +76,58 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
         body: finalBodyStr,
       });
 
-      // Handle 401 — try refresh once
-      if (res.status === 401 && conn.refreshToken) {
-        log.warn(`[${connLabel}] Token expired, refreshing...`);
-        try {
-          const refreshed = await refreshCodebuddy(conn.refreshToken);
-          await updateConnection(conn.id, {
-            accessToken: refreshed.accessToken,
-            refreshToken: refreshed.refreshToken,
-          });
-          headers.Authorization = `Bearer ${refreshed.accessToken}`;
+      // Handle 401 — try refresh, then failover
+      if (res.status === 401) {
+        if (conn.refreshToken) {
+          log.warn(`[${connLabel}] Token expired, refreshing...`);
+          try {
+            const refreshed = conn.provider === "cline"
+              ? await refreshCline(conn.refreshToken)
+              : await refreshCodebuddy(conn.refreshToken);
+            await updateConnection(conn.id, {
+              accessToken: refreshed.accessToken,
+              refreshToken: refreshed.refreshToken,
+            });
+            headers.Authorization = providerConfig.authFormat === "workos"
+              ? `Bearer workos:${refreshed.accessToken}`
+              : `Bearer ${refreshed.accessToken}`;
 
-          const retryRes = await fetch(providerConfig.baseUrl, {
-            method: "POST",
-            headers,
-            body: finalBodyStr,
-          });
+            const retryRes = await fetch(providerConfig.baseUrl, {
+              method: "POST",
+              headers,
+              body: finalBodyStr,
+            });
 
-          if (retryRes.ok || (retryRes.status >= 200 && retryRes.status < 500)) {
-            // Success after refresh — increment usage
-            await incrementUsage(conn.id);
-            return addTrackingHeaders(retryRes, resolvedModel, conn, startTime);
+            if (retryRes.ok || (retryRes.status >= 200 && retryRes.status < 400)) {
+              await incrementUsage(conn.id);
+              return addTrackingHeaders(retryRes, resolvedModel, conn, startTime);
+            }
+
+            // Refresh succeeded but request still failed
+            log.warn(`[${connLabel}] Request failed after refresh (${retryRes.status}), trying next account...`);
+            await recordFailure(conn.id);
+            lastError = `${connLabel}: HTTP ${retryRes.status} after token refresh`;
+            continue;
+          } catch (e) {
+            log.error(`[${connLabel}] Token refresh failed: ${e}`);
+            await setConnectionStatus(conn.id, "expired");
+            lastError = `${connLabel}: Token refresh failed`;
+            continue;
           }
-
-          // Refresh succeeded but request still failed — record failure and try next
-          log.warn(`[${connLabel}] Request failed after refresh (${retryRes.status}), trying next account...`);
-          await recordFailure(conn.id);
-          lastError = `${connLabel}: HTTP ${retryRes.status} after token refresh`;
-          continue;
-        } catch (e) {
-          log.error(`[${connLabel}] Token refresh failed: ${e}`);
-          await setConnectionStatus(conn.id, "expired");
-          lastError = `${connLabel}: Token refresh failed`;
-          continue;
         }
+        // No refresh token — mark expired and failover to next account
+        log.warn(`[${connLabel}] Unauthorized (401), no refresh token — trying next account...`);
+        await setConnectionStatus(conn.id, "expired");
+        lastError = `${connLabel}: Unauthorized (401)`;
+        continue;
+      }
+
+      // Handle 403 — forbidden / gateway block — failover
+      if (res.status === 403) {
+        log.warn(`[${connLabel}] Forbidden (403), trying next account...`);
+        await recordFailure(conn.id);
+        lastError = `${connLabel}: Forbidden (403)`;
+        continue;
       }
 
       // Handle rate limiting (429) — could be rate limit OR credit exhausted
@@ -129,15 +150,15 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
         continue;
       }
 
-      // Handle server errors (5xx) — failover to next account
-      if (res.status >= 500) {
-        log.warn(`[${connLabel}] Server error (${res.status}), trying next account...`);
+      // Handle server/gateway errors (5xx, 407, 408, 502, 503, 504) — failover
+      if (res.status >= 500 || res.status === 407 || res.status === 408) {
+        log.warn(`[${connLabel}] Server/gateway error (${res.status}), trying next account...`);
         await recordFailure(conn.id);
-        lastError = `${connLabel}: Server error ${res.status}`;
+        lastError = `${connLabel}: HTTP ${res.status}`;
         continue;
       }
 
-      // Success or client error (4xx except 401/429) — return as-is
+      // Success (2xx) or benign client error (400, 404, 422) — return as-is
       await incrementUsage(conn.id);
       return addTrackingHeaders(res, resolvedModel, conn, startTime);
     } catch (e: any) {
@@ -157,7 +178,9 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
  * Pick the least-used connection that hasn't been tried yet.
  */
 function pickConnection(providerId: string, triedIds: Set<string>): Connection | null {
-  const active = getActiveConnections(providerId).filter((c) => !triedIds.has(c.id));
+  const active = getActiveConnections(providerId).filter(
+    (c) => !triedIds.has(c.id) && !!c.accessToken
+  );
   if (active.length === 0) return null;
 
   return active.reduce((best, conn) => {
@@ -234,13 +257,18 @@ function buildUpstreamBody(body: any, model: string, stream: boolean): { finalBo
  * Build request headers for a specific connection.
  */
 function buildHeaders(conn: Connection, providerConfig: any): Record<string, string> {
+  // Check provider's auth format
+  const authHeader = providerConfig.authFormat === "workos"
+    ? `Bearer workos:${conn.accessToken}`
+    : `Bearer ${conn.accessToken}`;
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${conn.accessToken}`,
+    Authorization: authHeader,
     ...(providerConfig.headers ?? {}),
   };
 
-  if (conn.uid) {
+  if (conn.uid && conn.provider === "codebuddy") {
     headers["X-User-Id"] = conn.uid;
     headers["X-Domain"] = "www.codebuddy.ai";
   }

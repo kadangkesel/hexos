@@ -16,6 +16,17 @@ const VENV_PYTHON = process.platform === "win32"
   ? join(AUTOMATION_DIR, ".venv", "Scripts", "python.exe")
   : join(AUTOMATION_DIR, ".venv", "bin", "python");
 const LOGIN_SCRIPT = join(AUTOMATION_DIR, "login.py");
+const CLINE_LOGIN_SCRIPT = join(AUTOMATION_DIR, "cline_login.py");
+
+// Track active automation subprocesses for cleanup on cancel
+export const activeProcs = new Set<{ kill: () => void }>();
+
+export function killAllActiveProcs() {
+  for (const proc of activeProcs) {
+    try { proc.kill(); } catch {}
+  }
+  activeProcs.clear();
+}
 
 // ---------------------------------------------------------------------------
 // Shared: request auth state from CodeBuddy
@@ -255,6 +266,7 @@ export async function oauthCodebuddyAutomated(
       },
     },
   );
+  activeProcs.add(proc);
 
   // Read stdout line by line for progress updates
   const reader = proc.stdout.getReader();
@@ -279,6 +291,10 @@ export async function oauthCodebuddyAutomated(
             log.info(`[${accountLabel}] ${msg.message}`);
           } else if (msg.type === "result") {
             finalResult = msg;
+            // Log token presence for debugging missing refresh tokens
+            const hasAccess = !!msg.accessToken;
+            const hasRefresh = !!msg.refreshToken;
+            log.info(`[${accountLabel}] Result: success=${msg.success} accessToken=${hasAccess ? 'present' : 'EMPTY'} refreshToken=${hasRefresh ? 'present' : 'EMPTY'}`);
           } else if (msg.type === "error") {
             log.error(`[${accountLabel}] ${msg.error}`);
           } else if (msg.type === "debug") {
@@ -300,6 +316,7 @@ export async function oauthCodebuddyAutomated(
   }
 
   const exitCode = await proc.exited;
+  activeProcs.delete(proc);
 
   // Read stderr for error info
   let stderrText = "";
@@ -321,19 +338,25 @@ export async function oauthCodebuddyAutomated(
     return { success: false, error: errMsg };
   }
 
-  // Step 3: Save connection (even if token is empty - auth succeeded in browser)
-  const hasToken = !!finalResult.accessToken;
+  // Reject results with empty tokens — these create broken connections
+  if (!finalResult.accessToken) {
+    log.error(`[${accountLabel}] Login succeeded in browser but no token obtained (token poll failed). Skipping save.`);
+    return { success: false, error: "Token poll failed — no accessToken obtained" };
+  }
+
+  // Warn if refresh token is missing (accessToken present but no refreshToken)
+  if (!finalResult.refreshToken) {
+    log.warn(`[${accountLabel}] WARNING: accessToken present but refreshToken is EMPTY. Token refresh will not work.`);
+  }
+
+  // Step 3: Save connection
   const conn = await saveConnection({
     provider: "codebuddy",
     label: accountLabel,
-    accessToken: finalResult.accessToken || "",
+    accessToken: finalResult.accessToken,
     refreshToken: finalResult.refreshToken || "",
     uid: finalResult.uid || "",
   });
-
-  if (!hasToken) {
-    log.warn(`[${accountLabel}] Saved without token (token poll failed). Account may need re-auth.`);
-  }
 
   // Step 4: Save credit info if available
   if (finalResult.credit) {
@@ -359,6 +382,8 @@ export async function batchConnect(
   concurrency = 2,
   headless = true,
   isCancelled?: () => boolean,
+  providers: string[] = ["codebuddy"],
+  onProgress?: (completed: number, success: number, failed: number) => void,
 ): Promise<{ total: number; success: number; failed: number; errors: string[] }> {
   // Import proxy pool for random proxy selection
   let getRandomProxy: (() => string | null) | null = null;
@@ -369,7 +394,7 @@ export async function batchConnect(
 
   const results = { total: accounts.length, success: 0, failed: 0, errors: [] as string[] };
 
-  log.info(`Batch connecting ${accounts.length} accounts (concurrency: ${concurrency})...`);
+  log.info(`Batch connecting ${accounts.length} accounts (concurrency: ${concurrency}, providers: ${providers.join(", ")})...`);
 
   // Process in batches of `concurrency`
   for (let i = 0; i < accounts.length; i += concurrency) {
@@ -392,7 +417,21 @@ export async function batchConnect(
       if (proxy) log.info(`[${label}] Using proxy: ${proxy}`);
       // Stagger starts slightly to avoid hitting rate limits
       if (idx > 0) await Bun.sleep(2000 * idx);
-      return oauthCodebuddyAutomated(account.email, account.password, label, proxy, headless);
+
+      const providerResults: { provider: string; success: boolean; error?: string }[] = [];
+
+      for (const provider of providers) {
+        if (isCancelled?.()) break;
+        if (provider === "codebuddy") {
+          const r = await oauthCodebuddyAutomated(account.email, account.password, label, proxy, headless);
+          providerResults.push({ provider: "codebuddy", ...r });
+        } else if (provider === "cline") {
+          const r = await oauthClineAutomated(account.email, account.password, label, proxy, headless);
+          providerResults.push({ provider: "cline", ...r });
+        }
+      }
+
+      return providerResults;
     });
 
     const batchResults = await Promise.allSettled(promises);
@@ -400,16 +439,34 @@ export async function batchConnect(
     for (let j = 0; j < batchResults.length; j++) {
       const r = batchResults[j];
       const account = batch[j];
-      if (r.status === "fulfilled" && r.value.success) {
-        results.success++;
+      if (r.status === "fulfilled") {
+        const providerResults = r.value;
+        const allSucceeded = providerResults.length > 0 && providerResults.every((pr) => pr.success);
+        const anySucceeded = providerResults.some((pr) => pr.success);
+        if (allSucceeded) {
+          results.success++;
+        } else if (anySucceeded) {
+          // Partial success — count as success but log errors for failed providers
+          results.success++;
+          for (const pr of providerResults) {
+            if (!pr.success) {
+              results.errors.push(`${account.email} [${pr.provider}]: ${pr.error || "Unknown error"}`);
+            }
+          }
+        } else {
+          results.failed++;
+          for (const pr of providerResults) {
+            results.errors.push(`${account.email} [${pr.provider}]: ${pr.error || "Unknown error"}`);
+          }
+        }
       } else {
         results.failed++;
-        const errMsg = r.status === "fulfilled"
-          ? r.value.error || "Unknown error"
-          : r.reason?.message || "Unknown error";
-        results.errors.push(`${account.email}: ${errMsg}`);
+        results.errors.push(`${account.email}: ${r.reason?.message || "Unknown error"}`);
       }
     }
+
+    // Report incremental progress
+    onProgress?.(results.success + results.failed, results.success, results.failed);
 
     // Wait between batches to avoid rate limiting
     if (i + concurrency < accounts.length) {
@@ -453,4 +510,167 @@ export async function refreshCodebuddy(refreshToken: string): Promise<{ accessTo
   const data = await res.json() as any;
   if (data.code !== 0) throw new Error(`Refresh failed: ${JSON.stringify(data)}`);
   return { accessToken: data.data.accessToken, refreshToken: data.data.refreshToken ?? refreshToken };
+}
+
+// ---------------------------------------------------------------------------
+// Cline: automated OAuth via browser automation (Camoufox)
+// ---------------------------------------------------------------------------
+
+export async function oauthClineAutomated(
+  email: string,
+  password: string,
+  label?: string,
+  proxy?: string,
+  headless = true,
+): Promise<{ success: boolean; error?: string }> {
+  const accountLabel = label || email;
+
+  if (!isAutomationReady()) {
+    log.error("Automation not set up. Run: hexos auth setup-automation");
+    return { success: false, error: "Automation not set up" };
+  }
+
+  log.info(`[${accountLabel}] Launching Cline browser automation...`);
+
+  const proc = Bun.spawn(
+    [VENV_PYTHON, CLINE_LOGIN_SCRIPT, "--email", email, "--password", password],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        HEXOS_DEBUG: process.env.HEXOS_DEBUG || "false",
+        ...(proxy ? { HEXOS_PROXY: proxy, HTTP_PROXY: proxy, HTTPS_PROXY: proxy } : {}),
+        HEXOS_HEADLESS: headless ? "true" : "false",
+      },
+    },
+  );
+  activeProcs.add(proc);
+
+  // Read stdout (same pattern as oauthCodebuddyAutomated)
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: any = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === "progress") {
+            log.info(`[${accountLabel}] ${msg.message}`);
+          } else if (msg.type === "result") {
+            finalResult = msg;
+          } else if (msg.type === "error") {
+            log.error(`[${accountLabel}] ${msg.error}`);
+          } else if (msg.type === "debug") {
+            log.info(`[${accountLabel}] [debug] ${msg.message}`);
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
+  if (buffer.trim()) {
+    try {
+      const msg = JSON.parse(buffer);
+      if (msg.type === "result") finalResult = msg;
+    } catch {}
+  }
+
+  const exitCode = await proc.exited;
+  activeProcs.delete(proc);
+
+  let stderrText = "";
+  try {
+    const stderrReader = proc.stderr.getReader();
+    const { value } = await stderrReader.read();
+    if (value) stderrText = decoder.decode(value);
+  } catch {}
+
+  if (exitCode !== 0 && !finalResult) {
+    const errMsg = stderrText.trim() || `Process exited with code ${exitCode}`;
+    log.error(`[${accountLabel}] Cline automation failed: ${errMsg}`);
+    return { success: false, error: errMsg };
+  }
+
+  if (!finalResult || !finalResult.success) {
+    const errMsg = finalResult?.error || "Unknown Cline automation error";
+    log.error(`[${accountLabel}] Cline login failed: ${errMsg}`);
+    return { success: false, error: errMsg };
+  }
+
+  // Reject results with empty tokens — these create broken connections
+  if (!finalResult.accessToken) {
+    log.error(`[${accountLabel}] Cline login succeeded in browser but no token obtained. Skipping save.`);
+    return { success: false, error: "No accessToken obtained from Cline login" };
+  }
+
+  // Save connection as "cline" provider
+  const conn = await saveConnection({
+    provider: "cline",
+    label: accountLabel,
+    accessToken: finalResult.accessToken,
+    refreshToken: finalResult.refreshToken || "",
+    uid: finalResult.uid || "",
+  });
+
+  // Save credit info
+  if (finalResult.credit) {
+    const { updateConnection } = await import("./store.ts");
+    await updateConnection(conn.id, {
+      credit: {
+        ...finalResult.credit,
+        fetchedAt: Date.now(),
+      },
+    });
+  }
+
+  log.ok(`[${accountLabel}] Cline connected!`);
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Cline: token refresh
+// ---------------------------------------------------------------------------
+
+export async function refreshCline(refreshToken: string): Promise<{ accessToken: string; refreshToken: string }> {
+  const res = await fetch("https://api.cline.bot/api/v1/auth/refresh", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refreshToken, grantType: "refresh_token" }),
+  });
+  if (!res.ok) throw new Error(`Cline token refresh failed: ${res.status}`);
+  const data = await res.json() as any;
+  return {
+    accessToken: data.accessToken || data.access_token || "",
+    refreshToken: data.refreshToken || data.refresh_token || refreshToken,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cline: token verification
+// ---------------------------------------------------------------------------
+
+export async function checkClineToken(accessToken: string): Promise<{ valid: boolean; uid?: string; email?: string }> {
+  try {
+    const res = await fetch("https://api.cline.bot/api/v1/users/me", {
+      headers: {
+        "Authorization": `Bearer workos:${accessToken}`,
+        "User-Agent": "Cline/3.79.0",
+      },
+    });
+    if (!res.ok) return { valid: false };
+    const data = await res.json() as any;
+    return { valid: true, uid: data.id, email: data.email };
+  } catch {
+    return { valid: false };
+  }
 }

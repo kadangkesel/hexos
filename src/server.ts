@@ -25,6 +25,7 @@ interface BatchTaskLog {
 const batchConnectTasks = new Map<string, {
   status: "running" | "completed" | "failed" | "cancelled";
   total: number;
+  completed: number;
   success: number;
   failed: number;
   errors: string[];
@@ -331,17 +332,88 @@ export function createApp() {
     const id = c.req.param("id");
     const conn = listConnections().find((c) => c.id === id);
     if (!conn) return c.json({ error: "Connection not found" }, 404);
+    
+    const { updateConnection } = await import("./auth/store.ts");
+    
+    // Skip check for connections with empty accessToken — mark expired immediately
+    if (!conn.accessToken) {
+      log.warn(`[Check] ${conn.label} has empty accessToken — marking expired`);
+      await setConnectionStatus(conn.id, "expired");
+      return c.json({ valid: false, expired: true, reason: "empty_token" });
+    }
+    
+    if (conn.provider === "cline") {
+      const { checkClineToken } = await import("./auth/oauth.ts");
+      const status = await checkClineToken(conn.accessToken);
+      
+      // Token invalid → mark expired
+      if (!status.valid) {
+        log.warn(`[Check] ${conn.label} (Cline) token invalid — marking expired`);
+        await setConnectionStatus(conn.id, "expired");
+        return c.json({ valid: false, expired: true, reason: "token_invalid" });
+      }
+      
+      let uid = status.uid || conn.uid || "";
+      
+      // Save UID if we got it and it wasn't stored
+      if (status.uid && !conn.uid) {
+        await updateConnection(conn.id, { uid: status.uid });
+        uid = status.uid;
+      }
+      
+      let balance = 0;
+      
+      // Always try to fetch balance
+      if (uid) {
+        try {
+          const balRes = await fetch(`https://api.cline.bot/api/v1/users/${uid}/balance`, {
+            headers: { "Authorization": `Bearer workos:${conn.accessToken}`, "User-Agent": "Cline/3.79.0" },
+          });
+          const balData = await balRes.json() as any;
+          log.info(`[Cline check] Balance response for ${uid}: ${JSON.stringify(balData)}`);
+          if (balData?.success && balData?.data) {
+            balance = balData.data.balance ?? 0;
+          }
+        } catch (e: any) {
+          log.error(`[Cline check] Balance fetch error: ${e.message}`);
+        }
+      } else {
+        log.warn(`[Cline check] No UID for connection ${conn.label}`);
+      }
+      
+      // Update credit in DB — also ensure status is active since token is valid
+      await updateConnection(conn.id, {
+        credit: { totalCredits: balance, remainingCredits: balance, usedCredits: 0, packageName: "Cline", expiresAt: "", fetchedAt: Date.now() },
+      });
+      if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+      
+      return c.json({ valid: true, uid, balance, credit: { totalCredits: balance, remainingCredits: balance } });
+    }
+    
+    // CodeBuddy
     const status = await checkToken(conn.accessToken);
+    
+    // Token invalid → mark expired
+    if (!status.valid) {
+      log.warn(`[Check] ${conn.label} (CodeBuddy) token invalid — marking expired`);
+      await setConnectionStatus(conn.id, "expired");
+      return c.json({ valid: false, expired: true, reason: "token_invalid" });
+    }
+    
+    // Token valid — ensure status is active
+    if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+    
     return c.json(status);
   });
 
   // --- Batch connect (add accounts) ---
   app.post("/api/batch-connect", async (c) => {
     const body = await c.req.json();
-    const { accounts, concurrency = 2, headless = true } = body as {
+    const { accounts, concurrency = 2, headless = true, providers = ["codebuddy"] } = body as {
       accounts: Array<{ email: string; password: string; label?: string }>;
       concurrency?: number;
       headless?: boolean;
+      providers?: string[];
     };
 
     if (!accounts || !Array.isArray(accounts) || accounts.length === 0) {
@@ -354,7 +426,7 @@ export function createApp() {
 
     // Run batch connect in background, return immediately
     const taskId = crypto.randomUUID();
-    batchConnectTasks.set(taskId, { status: "running", total: accounts.length, success: 0, failed: 0, errors: [], logs: [] });
+    batchConnectTasks.set(taskId, { status: "running", total: accounts.length, completed: 0, success: 0, failed: 0, errors: [], logs: [] });
 
     // Capture logs via listener (non-invasive, no global hook)
     const logListener = (level: BatchTaskLog["level"], msg: string) => {
@@ -369,11 +441,21 @@ export function createApp() {
 
     // Fire and forget
     const cancelCheck = () => batchCancelFlags.get(taskId) === true;
-    batchConnect(accounts, concurrency, headless, cancelCheck).then((result) => {
+    const onProgress = (completed: number, success: number, failed: number) => {
+      const task = batchConnectTasks.get(taskId);
+      if (task && task.status === "running") {
+        task.completed = completed;
+        task.success = success;
+        task.failed = failed;
+      }
+    };
+
+    batchConnect(accounts, concurrency, headless, cancelCheck, providers, onProgress).then((result) => {
       const task = batchConnectTasks.get(taskId);
       if (task && task.status === "running") {
         task.status = "completed";
         task.total = result.total;
+        task.completed = result.success + result.failed;
         task.success = result.success;
         task.failed = result.failed;
         task.errors = result.errors;
@@ -398,7 +480,7 @@ export function createApp() {
     return c.json(task);
   });
 
-  app.post("/api/batch-connect/:taskId/cancel", (c) => {
+  app.post("/api/batch-connect/:taskId/cancel", async (c) => {
     const taskId = c.req.param("taskId");
     const task = batchConnectTasks.get(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
@@ -407,17 +489,88 @@ export function createApp() {
     task.status = "cancelled";
     const time = new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
     task.logs.push({ time, level: "error", message: "Batch cancelled by user" });
+    // Kill all active browser automation processes
+    const { killAllActiveProcs } = await import("./auth/oauth.ts");
+    killAllActiveProcs();
+    task.logs.push({ time, level: "info", message: "Browser processes terminated" });
     return c.json({ ok: true });
   });
 
   // --- Check credits for all connections ---
   app.post("/api/connections/check-credits", async (c) => {
     const conns = listConnections();
-    const results: Array<{ id: string; label: string; valid: boolean; credit?: unknown }> = [];
+    const results: Array<{ id: string; label: string; provider: string; valid: boolean; expired?: boolean; reason?: string; credit?: unknown }> = [];
+    let expiredCount = 0;
+    let reactivatedCount = 0;
     
     await Promise.all(conns.map(async (conn) => {
       try {
-        const status = await checkToken(conn.accessToken);
+        // Skip connections with empty accessToken — mark expired immediately
+        if (!conn.accessToken) {
+          if (conn.status !== "expired") {
+            await setConnectionStatus(conn.id, "expired");
+            expiredCount++;
+          }
+          results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "empty_token" });
+          return;
+        }
+        
+        let status: { valid: boolean; credit?: any; uid?: string; email?: string };
+        
+        if (conn.provider === "cline") {
+          // Cline: check token + fetch balance
+          const { checkClineToken } = await import("./auth/oauth.ts");
+          const clineStatus = await checkClineToken(conn.accessToken);
+          
+          if (!clineStatus.valid) {
+            // Token invalid → mark expired
+            if (conn.status !== "expired") {
+              await setConnectionStatus(conn.id, "expired");
+              expiredCount++;
+              log.warn(`[Check credits] ${conn.label} (Cline) token invalid — marked expired`);
+            }
+            results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
+            return;
+          }
+          
+          const uid = clineStatus.uid || conn.uid;
+          let balance = 0;
+          if (uid) {
+            try {
+              const balRes = await fetch(`https://api.cline.bot/api/v1/users/${uid}/balance`, {
+                headers: { "Authorization": `Bearer workos:${conn.accessToken}`, "User-Agent": "Cline/3.79.0" },
+              });
+              const balData = await balRes.json() as any;
+              if (balData?.success && balData?.data) balance = balData.data.balance ?? 0;
+            } catch {}
+          }
+          status = {
+            valid: true,
+            credit: { totalCredits: balance, remainingCredits: balance, usedCredits: 0, packageName: "Cline", expiresAt: "" },
+          };
+        } else {
+          // CodeBuddy
+          status = await checkToken(conn.accessToken);
+          
+          if (!status.valid) {
+            // Token invalid → mark expired
+            if (conn.status !== "expired") {
+              await setConnectionStatus(conn.id, "expired");
+              expiredCount++;
+              log.warn(`[Check credits] ${conn.label} (CodeBuddy) token invalid — marked expired`);
+            }
+            results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
+            return;
+          }
+        }
+        
+        // Token is valid — reactivate if it was expired/disabled
+        if (conn.status !== "active" && conn.status !== "disabled") {
+          await setConnectionStatus(conn.id, "active");
+          reactivatedCount++;
+          log.info(`[Check credits] ${conn.label} token valid — reactivated`);
+        }
+        
         if (status.credit) {
           const { updateConnection } = await import("./auth/store.ts");
           await updateConnection(conn.id, {
@@ -431,13 +584,16 @@ export function createApp() {
             },
           });
         }
-        results.push({ id: conn.id, label: conn.label, valid: status.valid, credit: status.credit });
+        results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: status.valid, credit: status.credit });
       } catch {
-        results.push({ id: conn.id, label: conn.label, valid: false });
+        results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false });
       }
     }));
 
-    return c.json({ checked: results.length, results });
+    if (expiredCount > 0) log.warn(`[Check credits] ${expiredCount} connection(s) marked expired (invalid token)`);
+    if (reactivatedCount > 0) log.info(`[Check credits] ${reactivatedCount} connection(s) reactivated (token valid again)`);
+
+    return c.json({ checked: results.length, expired: expiredCount, reactivated: reactivatedCount, results });
   });
 
   // --- Remove exhausted (zero credit / disabled) connections ---

@@ -78,12 +78,28 @@ export async function saveConnection(conn: Omit<Connection, "id" | "createdAt" |
     failCount: 0,
   };
   if (existing >= 0) {
-    // Preserve usage stats on reconnect, reset status
-    db.data.connections[existing] = {
-      ...db.data.connections[existing],
+    // Preserve usage stats on reconnect, reset status.
+    // IMPORTANT: Never overwrite existing tokens with empty strings.
+    // This prevents re-login attempts that fail to get tokens from
+    // wiping out previously valid credentials.
+    const patch: Record<string, any> = {
       ...conn,
       status: "active",
       failCount: 0,
+    };
+    // Don't overwrite existing tokens with empty values
+    if (!patch.accessToken && db.data.connections[existing].accessToken) {
+      delete patch.accessToken;
+    }
+    if (!patch.refreshToken && db.data.connections[existing].refreshToken) {
+      delete patch.refreshToken;
+    }
+    if (!patch.uid && db.data.connections[existing].uid) {
+      delete patch.uid;
+    }
+    db.data.connections[existing] = {
+      ...db.data.connections[existing],
+      ...patch,
     };
     await db.write();
     return db.data.connections[existing];

@@ -6,6 +6,7 @@ export interface ProviderConfig {
   format: ProviderFormat;
   baseUrl: string;
   authType: "oauth" | "apikey";
+  authFormat?: "bearer" | "workos"; // default "bearer"
   headers?: Record<string, string>;
 }
 
@@ -23,6 +24,22 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       "X-Plugin-Version": "2.91.0",
       "X-Codebuddy-Request": "1",
       "User-Agent": "codebuddy/2.91.0",
+    },
+  },
+  cline: {
+    id: "cline",
+    name: "Cline",
+    format: "openai",
+    baseUrl: "https://api.cline.bot/api/v1/chat/completions",
+    authType: "oauth",
+    authFormat: "workos",
+    headers: {
+      "User-Agent": "Cline/3.79.0",
+      "HTTP-Referer": "https://cline.bot",
+      "X-Title": "Cline",
+      "X-Platform": "Cline CLI - Node.js",
+      "X-Client-Type": "CLI",
+      "X-Core-Version": "3.79.0",
     },
   },
   openai: {

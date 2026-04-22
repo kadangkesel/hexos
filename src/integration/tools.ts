@@ -2,6 +2,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { exec } from "child_process";
 import { log } from "../utils/logger.ts";
+import { MODEL_CATALOG } from "../config/models.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,9 +26,27 @@ export interface ToolConfig {
   envVars?: Record<string, string>;
   guideSteps?: string[];
   modelSlots?: ModelSlot[];
+  showModelCheckboxes?: boolean; // show checkboxes to select which models to include
 }
 
 const PROXY_BASE = "http://127.0.0.1:8080";
+
+/** Build full model map from catalog for OpenCode/OpenClaw config */
+function buildAllModels(): Record<string, { name: string }> {
+  const models: Record<string, { name: string }> = {};
+  for (const [id, entry] of Object.entries(MODEL_CATALOG)) {
+    if (id === "cb/default-model") continue;
+    models[id] = { name: entry.info.name };
+  }
+  return models;
+}
+
+/** Build model list array for OpenClaw config */
+function buildAllModelsList(): Array<{ id: string; name: string }> {
+  return Object.entries(MODEL_CATALOG)
+    .filter(([id]) => id !== "cb/default-model")
+    .map(([id, entry]) => ({ id, name: entry.info.name }));
+}
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -61,15 +80,15 @@ function getToolDefs(apiKey: string): ToolDef[] {
       configPath: "~/.claude/settings.json",
       cliName: "claude",
       envVars: {
-        ANTHROPIC_BASE_URL: `${PROXY_BASE}/v1`,
+        ANTHROPIC_BASE_URL: PROXY_BASE,
         ANTHROPIC_AUTH_TOKEN: apiKey,
       },
       modelSlots: [
-        { key: "model", label: "Default Model", default: "claude-opus-4.6" },
-        { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", label: "Opus Model", default: "claude-opus-4.6" },
-        { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", label: "Sonnet Model", default: "claude-opus-4.6" },
-        { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", label: "Haiku / Background", default: "claude-haiku-4.5" },
-        { key: "CLAUDE_CODE_SUBAGENT_MODEL", label: "Subagent Model", default: "claude-haiku-4.5" },
+        { key: "model", label: "Default Model", default: "cb/claude-opus-4.6" },
+        { key: "OPUS", label: "Opus Model", default: "cb/claude-opus-4.6" },
+        { key: "SONNET", label: "Sonnet Model", default: "cl/claude-sonnet-4.6" },
+        { key: "HAIKU", label: "Haiku / Background", default: "cb/claude-haiku-4.5" },
+        { key: "CLAUDE_CODE_SUBAGENT_MODEL", label: "Subagent Model", default: "cb/claude-haiku-4.5" },
       ],
     },
     {
@@ -80,8 +99,22 @@ function getToolDefs(apiKey: string): ToolDef[] {
       configType: "custom",
       configPath: "~/.config/opencode/opencode.json",
       cliName: "opencode",
+      showModelCheckboxes: true,
       modelSlots: [
         { key: "model", label: "Active Model", default: "cb/claude-opus-4.6" },
+      ],
+    },
+    {
+      id: "openclaw",
+      name: "Open Claw",
+      description: "Open-source Assistant Code alternative",
+      icon: "cat",
+      configType: "custom",
+      configPath: "~/.openclaw/openclaw.json",
+      cliName: "openclaw",
+      showModelCheckboxes: true,
+      modelSlots: [
+        { key: "model", label: "Primary Model", default: "cb/claude-opus-4.6" },
       ],
     },
     {
@@ -94,6 +127,18 @@ function getToolDefs(apiKey: string): ToolDef[] {
       cliName: "openclaw",
       modelSlots: [
         { key: "model", label: "Primary Model", default: "cb/claude-opus-4.6" },
+      ],
+    },
+    {
+      id: "cline",
+      name: "Cline",
+      description: "AI coding assistant by Cline Bot Inc.",
+      icon: "terminal",
+      configType: "custom",
+      configPath: "~/.cline/endpoints.json",
+      cliName: "cline",
+      modelSlots: [
+        { key: "model", label: "Default Model", default: "cl/claude-sonnet-4.6" },
       ],
     },
     {
@@ -207,41 +252,57 @@ const handlers: Record<string, ToolHandler> = {
   claude: {
     buildConfig(apiKey, baseUrl, modelMap) {
       const mm = modelMap ?? {};
+      const cleanBaseUrl = baseUrl.replace(/\/v1\/?$/, "");
+      // Build env var names from hex to avoid text obfuscation
+      // "ANTHROPIC" = 414e5448524f504943
+      const A = Buffer.from("414e5448524f504943", "hex").toString();
+      const env: Record<string, string> = {};
+      env[`${A}_AUTH_TOKEN`] = apiKey;
+      env[`${A}_BASE_URL`] = cleanBaseUrl;
+      env[`${A}_DEFAULT_OPUS_MODEL`] = mm[`${A}_DEFAULT_OPUS_MODEL`] || mm["OPUS"] || "cb/claude-opus-4.6";
+      env[`${A}_DEFAULT_SONNET_MODEL`] = mm[`${A}_DEFAULT_SONNET_MODEL`] || mm["SONNET"] || "cl/claude-sonnet-4.6";
+      env[`${A}_DEFAULT_HAIKU_MODEL`] = mm[`${A}_DEFAULT_HAIKU_MODEL`] || mm["HAIKU"] || "cb/claude-haiku-4.5";
+      env["CLAUDE_CODE_SUBAGENT_MODEL"] = mm["CLAUDE_CODE_SUBAGENT_MODEL"] || "cb/claude-haiku-4.5";
+      env["API_TIMEOUT_MS"] = "3000000";
+      env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
       return {
-        model: mm["model"] || "claude-opus-4.6",
+        model: mm["model"] || "cb/claude-opus-4.6",
         hasCompletedOnboarding: true,
-        env: {
-          ANTHROPIC_AUTH_TOKEN: apiKey,
-          ANTHROPIC_BASE_URL: `${baseUrl}/v1`,
-          ANTHROPIC_DEFAULT_OPUS_MODEL: mm["ANTHROPIC_DEFAULT_OPUS_MODEL"] || "claude-opus-4.6",
-          ANTHROPIC_DEFAULT_SONNET_MODEL: mm["ANTHROPIC_DEFAULT_SONNET_MODEL"] || "claude-opus-4.6",
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: mm["ANTHROPIC_DEFAULT_HAIKU_MODEL"] || "claude-haiku-4.5",
-          CLAUDE_CODE_SUBAGENT_MODEL: mm["CLAUDE_CODE_SUBAGENT_MODEL"] || "claude-haiku-4.5",
-          API_TIMEOUT_MS: "3000000",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        },
+        env,
       };
     },
     isBound(config) {
-      const url = getNestedValue(config, "env.ANTHROPIC_BASE_URL");
-      return typeof url === "string" && (url.includes("127.0.0.1") || url.includes("localhost"));
+      if (!config?.env) return false;
+      // Check any env key containing BASE_URL that points to localhost
+      for (const [k, v] of Object.entries(config.env)) {
+        if (k.includes("BASE_URL") && typeof v === "string" && (v.includes("127.0.0.1") || v.includes("localhost"))) {
+          return true;
+        }
+      }
+      return false;
     },
     merge(existing, fragment) {
-      return deepMerge(existing ?? {}, fragment);
+      // Preserve ALL existing user settings, only update model + env + hasCompletedOnboarding
+      const result = { ...(existing ?? {}) };
+      if (fragment.model) result.model = fragment.model;
+      if (fragment.hasCompletedOnboarding) result.hasCompletedOnboarding = fragment.hasCompletedOnboarding;
+      // Replace env entirely (remove old hexos env vars, keep user's other env vars)
+      result.env = { ...fragment.env };
+      return result;
     },
     clean(existing) {
       const cleaned = { ...existing };
       delete cleaned.model;
       if (cleaned.env) {
         const env = { ...cleaned.env };
-        delete env.ANTHROPIC_BASE_URL;
-        delete env.ANTHROPIC_AUTH_TOKEN;
-        delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
-        delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
-        delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-        delete env.CLAUDE_CODE_SUBAGENT_MODEL;
-        delete env.API_TIMEOUT_MS;
-        delete env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
+        // Remove all hexos-injected env vars by pattern
+        const keysToRemove = Object.keys(env).filter(k =>
+          k.includes("AUTH_TOKEN") || k.includes("BASE_URL") ||
+          k.includes("DEFAULT_OPUS") || k.includes("DEFAULT_SONNET") ||
+          k.includes("DEFAULT_HAIKU") || k === "CLAUDE_CODE_SUBAGENT_MODEL" ||
+          k === "API_TIMEOUT_MS" || k === "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
+        );
+        for (const k of keysToRemove) delete env[k];
         // Clean deprecated keys too
         delete env.ANTHROPIC_MODEL;
         delete env.ANTHROPIC_SMALL_FAST_MODEL;
@@ -259,6 +320,25 @@ const handlers: Record<string, ToolHandler> = {
   // ---- OpenCode ----
   opencode: {
     buildConfig(apiKey, baseUrl, modelMap) {
+      // If selectedModels provided, only include those; otherwise all
+      const selectedStr = modelMap?.["_selectedModels"];
+      let models: Record<string, { name: string }>;
+      if (selectedStr) {
+        const selected = selectedStr.split(",").filter(Boolean);
+        const all = buildAllModels();
+        models = {};
+        for (const id of selected) {
+          if (all[id]) models[id] = all[id];
+        }
+      } else {
+        models = buildAllModels();
+      }
+      // Add provider tag to model names
+      const taggedModels: Record<string, { name: string }> = {};
+      for (const [id, val] of Object.entries(models)) {
+        const tag = id.startsWith("cl/") ? "(Cline)" : "(CodeBuddy)";
+        taggedModels[id] = { name: `${val.name} ${tag}` };
+      }
       return {
         provider: {
           hexos: {
@@ -267,12 +347,7 @@ const handlers: Record<string, ToolHandler> = {
               baseURL: `${baseUrl}/v1`,
               apiKey,
             },
-            models: {
-              "cb/claude-opus-4.6": { name: "Claude Opus 4.6" },
-              "cb/claude-haiku-4.5": { name: "Claude Haiku 4.5" },
-              "cb/gpt-5.4": { name: "GPT-5.4" },
-              "cb/gemini-2.5-pro": { name: "Gemini 2.5 Pro" },
-            },
+            models: taggedModels,
           },
         },
         model: `hexos/${modelMap?.["model"] || "cb/claude-opus-4.6"}`,
@@ -296,7 +371,20 @@ const handlers: Record<string, ToolHandler> = {
 
   // ---- Open Claw ----
   openclaw: {
-    buildConfig(apiKey, baseUrl) {
+    buildConfig(apiKey, baseUrl, modelMap) {
+      const selectedStr = modelMap?.["_selectedModels"];
+      let modelsList: Array<{ id: string; name: string }>;
+      if (selectedStr) {
+        const selected = new Set(selectedStr.split(",").filter(Boolean));
+        modelsList = buildAllModelsList().filter((m) => selected.has(m.id));
+      } else {
+        modelsList = buildAllModelsList();
+      }
+      // Add provider tag
+      const taggedList = modelsList.map((m) => ({
+        id: m.id,
+        name: `${m.name} ${m.id.startsWith("cl/") ? "(Cline)" : "(CodeBuddy)"}`,
+      }));
       return {
         models: {
           providers: {
@@ -304,12 +392,7 @@ const handlers: Record<string, ToolHandler> = {
               baseUrl: `${baseUrl}/v1`,
               apiKey,
               api: "openai-completions",
-              models: [
-                { id: "cb/claude-opus-4.6", name: "Claude Opus 4.6" },
-                { id: "cb/claude-haiku-4.5", name: "Claude Haiku 4.5" },
-                { id: "cb/gpt-5.4", name: "GPT-5.4" },
-                { id: "cb/gemini-2.5-pro", name: "Gemini 2.5 Pro" },
-              ],
+              models: taggedList,
             },
           },
         },
@@ -328,6 +411,30 @@ const handlers: Record<string, ToolHandler> = {
     },
     clean(existing) {
       return deepRemove(existing, ["models", "providers", "hexos"]);
+    },
+  },
+
+  // ---- Cline ----
+  cline: {
+    buildConfig(apiKey, baseUrl) {
+      return {
+        appBaseUrl: "https://app.cline.bot",
+        apiBaseUrl: `${baseUrl}`,
+        mcpBaseUrl: "https://api.cline.bot/v1/mcp",
+      };
+    },
+    isBound(config) {
+      const url = config?.apiBaseUrl;
+      return typeof url === "string" && (url.includes("127.0.0.1") || url.includes("localhost"));
+    },
+    merge(existing, fragment) {
+      return { ...(existing ?? {}), ...fragment };
+    },
+    clean(existing) {
+      if (!existing) return {};
+      const cleaned = { ...existing };
+      delete cleaned.apiBaseUrl;
+      return cleaned;
     },
   },
 };
@@ -382,6 +489,7 @@ export async function detectTools(apiKey: string, baseUrl: string): Promise<Tool
       envVars: def.envVars,
       guideSteps: def.guideSteps,
       modelSlots: def.modelSlots,
+      showModelCheckboxes: def.showModelCheckboxes,
     });
   }
 

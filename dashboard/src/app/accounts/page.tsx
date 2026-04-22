@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useConnectionsStore, type Connection } from "@/stores/connections";
 import { PageHeader } from "@/components/PageHeader";
 import { motion } from "motion/react";
@@ -14,6 +14,7 @@ import {
   Download,
   Upload,
   Square,
+  ListFilter,
 } from "lucide-react";
 import {
   Card,
@@ -77,6 +78,13 @@ function formatDate(d?: string | null): string {
   });
 }
 
+function formatCredit(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  if (n >= 100) return `${Math.round(n)}`;
+  return n.toFixed(1);
+}
+
 function creditDisplay(conn: Connection): string {
   const credit = conn.credit as
     | { remainingCredits?: number; totalCredits?: number }
@@ -84,7 +92,7 @@ function creditDisplay(conn: Connection): string {
   if (!credit) return "\u2014";
   const rem = credit.remainingCredits ?? 0;
   const tot = credit.totalCredits ?? 0;
-  return `${rem.toFixed(1)} / ${tot.toFixed(1)}`;
+  return `${formatCredit(rem)} / ${formatCredit(tot)}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -110,7 +118,12 @@ function AccountRow({ conn, onToggle, onCheck, onRemove, busy }: AccountRowProps
   return (
     <TableRow>
       <TableCell className="max-w-[200px] truncate font-medium">
-        {conn.label ?? conn.email}
+        <div className="flex items-center gap-1.5">
+          {conn.label ?? conn.email}
+          <Badge variant="outline" className="text-[9px] font-mono shrink-0">
+            {String((conn as any).provider || "codebuddy")}
+          </Badge>
+        </div>
       </TableCell>
       <TableCell>
         <Badge variant={STATUS_BADGE_VARIANT[status]}>{status}</Badge>
@@ -205,6 +218,7 @@ function BatchAddSection() {
   const [text, setText] = useState("");
   const [concurrency, setConcurrency] = useState(2);
   const [headless, setHeadless] = useState(true);
+  const [providers, setProviders] = useState<string[]>(["codebuddy"]);
   const taskId = batchTaskId;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -267,7 +281,7 @@ function BatchAddSection() {
     });
 
     try {
-      await batchConnect({ accounts, concurrency, headless });
+      await batchConnect({ accounts, concurrency, headless, providers });
       toast.success("Batch started");
     } catch {
       toast.error("Failed to start batch");
@@ -277,7 +291,7 @@ function BatchAddSection() {
   const isRunning = !!taskId;
   const progress =
     batchTask && batchTask.total > 0
-      ? Math.round((batchTask.completed / batchTask.total) * 100)
+      ? Math.round(((batchTask.completed ?? 0) / batchTask.total) * 100)
       : 0;
 
   return (
@@ -297,13 +311,42 @@ function BatchAddSection() {
         </CardHeader>
         <CardContent className="space-y-4">
           <Textarea
-            className="font-mono text-xs"
+            className="font-mono text-xs max-h-[160px] overflow-y-auto resize-none"
             rows={5}
             placeholder={"user1@example.com|password123\nuser2@example.com:secret"}
             value={text}
             onChange={(e) => setText(e.target.value)}
             disabled={isRunning}
           />
+
+          <div className="flex flex-wrap gap-4">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={providers.includes("codebuddy")}
+                onChange={(e) => {
+                  if (e.target.checked) setProviders(p => [...p, "codebuddy"]);
+                  else setProviders(p => p.filter(x => x !== "codebuddy"));
+                }}
+                disabled={isRunning}
+                className="rounded"
+              />
+              <span>CodeBuddy</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={providers.includes("cline")}
+                onChange={(e) => {
+                  if (e.target.checked) setProviders(p => [...p, "cline"]);
+                  else setProviders(p => p.filter(x => x !== "cline"));
+                }}
+                disabled={isRunning}
+                className="rounded"
+              />
+              <span>Cline</span>
+            </label>
+          </div>
 
           <div className="flex flex-wrap items-end gap-4">
             <div className="space-y-1.5">
@@ -424,6 +467,297 @@ function BatchAddSection() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Filter Unconnected                                                 */
+/* ------------------------------------------------------------------ */
+
+function FilterUnconnectedSection() {
+  const { connections, batchConnect, cancelBatch, fetchBatchStatus, batchTaskId, batchTask, batchLoading, fetch } =
+    useConnectionsStore();
+
+  const [text, setText] = useState("");
+  const [provider, setProvider] = useState<"codebuddy" | "cline">("cline");
+  const [concurrency, setConcurrency] = useState(2);
+  const [headless, setHeadless] = useState(true);
+
+  const taskId = batchTaskId;
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  useEffect(() => {
+    if (!taskId) return;
+    fetchBatchStatus(taskId);
+    pollRef.current = setInterval(() => fetchBatchStatus(taskId), 2000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [taskId, fetchBatchStatus]);
+
+  useEffect(() => {
+    if (
+      batchTask &&
+      (batchTask.status === "completed" || batchTask.status === "done" || batchTask.status === "cancelled" || batchTask.status === "failed")
+    ) {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      if (batchTask.status === "cancelled") toast("Batch cancelled");
+      else if (batchTask.status === "failed") toast.error("Batch failed");
+      else toast.success(`Batch complete: ${batchTask.completed ?? batchTask.success ?? 0} added, ${batchTask.failed} failed`);
+      useConnectionsStore.setState({ batchTaskId: null });
+      fetch();
+    }
+  }, [batchTask, fetch]);
+
+  // Build set of connected emails per provider
+  const connectedEmails = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const conn of connections) {
+      const p = String((conn as any).provider || "codebuddy");
+      if (!map.has(p)) map.set(p, new Set());
+      map.get(p)!.add((conn.label ?? conn.email ?? "").toLowerCase());
+    }
+    return map;
+  }, [connections]);
+
+  // Parse input and filter out already-connected accounts
+  const parsed = useMemo(() => {
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const connected = connectedEmails.get(provider) ?? new Set();
+    const all: { email: string; password: string }[] = [];
+    const missing: { email: string; password: string }[] = [];
+    const alreadyConnected: string[] = [];
+
+    for (const line of lines) {
+      const sep = line.includes("|") ? "|" : line.includes(";") ? ";" : ":";
+      const [email, password] = line.split(sep, 2);
+      const e = (email ?? "").trim().toLowerCase();
+      const p = (password ?? "").trim();
+      if (!e) continue;
+      all.push({ email: e, password: p });
+      if (connected.has(e)) {
+        alreadyConnected.push(e);
+      } else {
+        missing.push({ email: e, password: p });
+      }
+    }
+    return { all, missing, alreadyConnected };
+  }, [text, provider, connectedEmails]);
+
+  const isRunning = !!taskId;
+  const progress =
+    batchTask && batchTask.total > 0
+      ? Math.round(((batchTask.completed ?? 0) / batchTask.total) * 100)
+      : 0;
+
+  async function handleStart() {
+    if (parsed.missing.length === 0) {
+      toast.error("No unconnected accounts to process");
+      return;
+    }
+    try {
+      await batchConnect({
+        accounts: parsed.missing,
+        concurrency,
+        headless,
+        providers: [provider],
+      });
+      toast.success(`Batch started: ${parsed.missing.length} accounts`);
+    } catch {
+      toast.error("Failed to start batch");
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.3 }}
+    >
+      <Card className="mt-3">
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <ListFilter className="h-4 w-4 text-muted-foreground" />
+            <div>
+              <CardTitle>Filter Unconnected</CardTitle>
+              <CardDescription>
+                Paste your account list — only accounts <strong>not yet connected</strong> to the selected provider will be shown and batch-connected.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Provider selector */}
+          <div className="flex items-center gap-3">
+            <Label className="text-xs text-muted-foreground shrink-0">Provider:</Label>
+            <div className="flex gap-1.5">
+              {(["codebuddy", "cline"] as const).map((p) => (
+                <Button
+                  key={p}
+                  variant={provider === p ? "default" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs px-3"
+                  onClick={() => setProvider(p)}
+                >
+                  {p === "codebuddy" ? "CodeBuddy" : "Cline"}
+                  <Badge variant="secondary" className="ml-1.5 text-[9px] px-1 py-0">
+                    {connectedEmails.get(p)?.size ?? 0}
+                  </Badge>
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          {/* Account list input */}
+          <Textarea
+            className="font-mono text-xs max-h-[160px] overflow-y-auto resize-none"
+            rows={5}
+            placeholder={"email|password\nemail:password\nemail;password"}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            disabled={isRunning}
+          />
+
+          {/* Stats */}
+          {parsed.all.length > 0 && (
+            <div className="flex flex-wrap gap-3 text-xs">
+              <span className="text-muted-foreground">
+                Total: <strong className="text-foreground">{parsed.all.length}</strong>
+              </span>
+              <span className="text-muted-foreground">
+                Already connected: <strong className="text-green-400">{parsed.alreadyConnected.length}</strong>
+              </span>
+              <span className="text-muted-foreground">
+                Missing: <strong className="text-amber-400">{parsed.missing.length}</strong>
+              </span>
+            </div>
+          )}
+
+          {/* Missing accounts list */}
+          {parsed.missing.length > 0 && !isRunning && (
+            <div className="rounded-md border border-border overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b border-border">
+                <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                  Unconnected to {provider === "codebuddy" ? "CodeBuddy" : "Cline"} ({parsed.missing.length})
+                </span>
+              </div>
+              <div className="max-h-[200px] overflow-y-auto">
+                {parsed.missing.map((acc, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2 px-3 py-1 text-xs font-mono border-b border-border/50 last:border-0"
+                  >
+                    <span className="text-amber-400 shrink-0 w-5 text-right text-[10px] text-muted-foreground">{i + 1}</span>
+                    <span className="truncate">{acc.email}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Controls */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">Concurrency:</Label>
+              <Input
+                type="number"
+                min={1}
+                max={20}
+                value={concurrency}
+                onChange={(e) => setConcurrency(Number(e.target.value) || 2)}
+                className="w-16 h-8 text-xs"
+                disabled={isRunning}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                size="sm"
+                checked={headless}
+                onCheckedChange={setHeadless}
+                disabled={isRunning}
+              />
+              <Label className="text-xs text-muted-foreground">Headless</Label>
+            </div>
+            <div className="ml-auto flex gap-2">
+              {isRunning ? (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => { if (taskId) cancelBatch(taskId); }}
+                >
+                  <Square className="h-3.5 w-3.5" />
+                  Cancel
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={handleStart}
+                  disabled={batchLoading || parsed.missing.length === 0}
+                >
+                  {batchLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                  Connect {parsed.missing.length} accounts
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Progress */}
+          {isRunning && batchTask && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">
+                  Task: <code className="text-xs">{taskId ?? batchTask.taskId}</code>
+                </span>
+                <div className="flex items-center gap-3">
+                  {batchTask.failed > 0 && (
+                    <span className="text-xs text-destructive">{batchTask.failed} failed</span>
+                  )}
+                  <span>
+                    {batchTask.completed ?? 0}/{batchTask.total} ({progress}%)
+                  </span>
+                </div>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+
+              {/* Live logs */}
+              {batchTask.logs && batchTask.logs.length > 0 && (
+                <div className="rounded-sm border border-border bg-muted/30 overflow-hidden min-w-0">
+                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-muted/50">
+                    <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Logs</span>
+                    <span className="text-[10px] text-muted-foreground">{batchTask.logs.length} entries</span>
+                  </div>
+                  <div className="max-h-[200px] overflow-y-auto p-0 min-w-0">
+                    <div className="min-w-0">
+                      {batchTask.logs.map((log: any, i: number) => (
+                        <div
+                          key={i}
+                          className={`flex gap-2 px-3 py-0.5 text-[11px] font-mono border-b border-border/30 last:border-0 min-w-0 ${
+                            log.level === "error" ? "text-destructive" : log.level === "warn" ? "text-amber-400" : "text-muted-foreground"
+                          }`}
+                        >
+                          <span className="shrink-0 text-muted-foreground/60 w-[60px]">{log.time}</span>
+                          <span className="shrink-0 w-3">
+                            {log.level === "error" ? "\u2717" : log.level === "warn" ? "\u26A0" : "\u2139"}
+                          </span>
+                          <span className="break-all min-w-0">{log.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -481,13 +815,15 @@ export default function AccountsPage() {
         } else {
           toast.error("Token is invalid");
         }
+        // Refresh to get updated credit info
+        await fetch();
       } catch {
         toast.error("Token check failed");
       } finally {
         setBusyId(null);
       }
     },
-    [checkToken],
+    [checkToken, fetch],
   );
 
   const handleRemove = useCallback(
@@ -663,6 +999,9 @@ export default function AccountsPage() {
 
       {/* ---- Batch Add ---- */}
       <BatchAddSection />
+
+      {/* ---- Filter Unconnected ---- */}
+      <FilterUnconnectedSection />
     </>
   );
 }

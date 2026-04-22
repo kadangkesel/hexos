@@ -39,6 +39,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Checkbox, CheckboxIndicator } from "@/components/animate-ui/primitives/base/checkbox";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 
@@ -58,11 +59,22 @@ const iconColors: Record<string, string> = {
   claude: "bg-orange-500/15 text-orange-500",
   opencode: "bg-blue-500/15 text-blue-500",
   openclaw: "bg-purple-500/15 text-purple-500",
+  cline: "bg-emerald-500/15 text-emerald-500",
   hermes: "bg-cyan-500/15 text-cyan-500",
 };
 
 function copyToClipboard(text: string, label = "Copied") {
   navigator.clipboard.writeText(text).then(() => toast.success(label));
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers: model ID format                                           */
+/* ------------------------------------------------------------------ */
+
+// All tools use cb/ or cl/ prefix - no stripping needed
+function getProviderTag(id: string): string {
+  if (id.startsWith("cl/")) return "Cline";
+  return "CodeBuddy";
 }
 
 /* ------------------------------------------------------------------ */
@@ -74,26 +86,6 @@ const TABS = [
   { value: "manual", label: "Manual Config" },
 ] as const;
 type TabValue = (typeof TABS)[number]["value"];
-
-/* ------------------------------------------------------------------ */
-/*  Helpers: model ID format                                           */
-/* ------------------------------------------------------------------ */
-
-// Claude Code uses Anthropic format (no cb/ prefix)
-// OpenCode, OpenClaw use OpenAI format (with cb/ prefix)
-const ANTHROPIC_FORMAT_TOOLS = new Set(["claude"]);
-
-function stripCb(id: string): string {
-  return id.startsWith("cb/") ? id.slice(3) : id;
-}
-
-function ensureCb(id: string): string {
-  return id.startsWith("cb/") ? id : `cb/${id}`;
-}
-
-function formatModelId(id: string, toolId: string): string {
-  return ANTHROPIC_FORMAT_TOOLS.has(toolId) ? stripCb(id) : id;
-}
 
 /* ------------------------------------------------------------------ */
 /*  Model Slot Selector                                                */
@@ -111,13 +103,16 @@ function SlotSelector({
   toolId: string;
 }) {
   const { models } = useModelsStore();
-  const useAnthropicFormat = ANTHROPIC_FORMAT_TOOLS.has(toolId);
+  const options = models.map((m) => {
+    const provider = getProviderTag(m.id);
+    return { value: m.id, label: m.name, provider };
+  });
 
-  // Build options: for Anthropic tools strip cb/, for OpenAI tools keep cb/
-  const options = models.map((m) => ({
-    value: useAnthropicFormat ? stripCb(m.id) : m.id,
-    label: m.name,
-  }));
+  // Sort: CodeBuddy first, then Cline
+  options.sort((a, b) => {
+    if (a.provider === b.provider) return 0;
+    return a.provider === "CodeBuddy" ? -1 : 1;
+  });
 
   return (
     <div className="flex items-center gap-3">
@@ -131,7 +126,12 @@ function SlotSelector({
         <SelectContent>
           {options.map((o) => (
             <SelectItem key={o.value} value={o.value}>
-              {o.label}
+              <span className="flex items-center gap-1.5">
+                {o.label}
+                <span className={`text-[9px] px-1 py-0.5 rounded-sm leading-none ${o.provider === "Cline" ? "bg-emerald-500/15 text-emerald-500" : "bg-amber-500/15 text-amber-500"}`}>
+                  {o.provider}
+                </span>
+              </span>
             </SelectItem>
           ))}
         </SelectContent>
@@ -147,7 +147,6 @@ function SlotSelector({
 function useModelMap(slots?: ModelSlot[]) {
   const [map, setMap] = useState<Record<string, string>>({});
 
-  // Initialize from defaults
   useEffect(() => {
     if (!slots) return;
     const initial: Record<string, string> = {};
@@ -168,12 +167,33 @@ function useModelMap(slots?: ModelSlot[]) {
 
 function IntegrationCard({ integration, index }: { integration: Integration; index: number }) {
   const { bind, bindingId } = useIntegrationsStore();
+  const { models } = useModelsStore();
   const Icon = getIcon(integration.icon);
   const isBusy = bindingId === integration.id;
   const { map, setSlot } = useModelMap(integration.modelSlots);
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(() => new Set(models.map((m) => m.id)));
+
+  // Sync selectedModels when models load
+  useEffect(() => {
+    if (models.length > 0 && selectedModels.size === 0) {
+      setSelectedModels(new Set(models.map((m) => m.id)));
+    }
+  }, [models, selectedModels.size]);
+
+  const toggleModel = (id: string) => {
+    setSelectedModels((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   const handleBind = async () => {
-    const ok = await bind(integration.id, Object.keys(map).length > 0 ? map : undefined);
+    const bindMap = { ...map };
+    if (integration.showModelCheckboxes) {
+      bindMap["_selectedModels"] = Array.from(selectedModels).join(",");
+    }
+    const ok = await bind(integration.id, Object.keys(bindMap).length > 0 ? bindMap : undefined);
     toast[ok ? "success" : "error"](ok ? `${integration.name} bound` : `Failed to bind ${integration.name}`);
   };
 
@@ -195,7 +215,6 @@ function IntegrationCard({ integration, index }: { integration: Integration; ind
         </CardHeader>
 
         <CardContent className="flex flex-col gap-3 flex-1">
-          {/* Status */}
           <div className="flex flex-wrap gap-1.5">
             <Badge variant={integration.installed ? "default" : "secondary"} className={integration.installed ? "bg-green-500/15 text-green-600 dark:text-green-400" : ""}>
               {integration.installed ? "Installed" : "Not Found"}
@@ -205,7 +224,6 @@ function IntegrationCard({ integration, index }: { integration: Integration; ind
             </Badge>
           </div>
 
-          {/* Config path */}
           {integration.configPath && (
             <div className="flex items-center gap-2">
               <FileCode className="size-3.5 shrink-0 text-muted-foreground" />
@@ -213,7 +231,6 @@ function IntegrationCard({ integration, index }: { integration: Integration; ind
             </div>
           )}
 
-          {/* Model slot selectors */}
           {integration.modelSlots && integration.modelSlots.length > 0 && (
             <div className="flex flex-col gap-2 mt-1">
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Model Mapping</span>
@@ -229,7 +246,42 @@ function IntegrationCard({ integration, index }: { integration: Integration; ind
             </div>
           )}
 
-          {/* Guide steps */}
+          {integration.showModelCheckboxes && models.length > 0 && (
+            <div className="flex flex-col gap-2 mt-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Models to Include</span>
+                <div className="flex gap-2">
+                  <button className="text-[10px] text-primary hover:underline" onClick={() => setSelectedModels(new Set(models.map((m) => m.id)))}>All</button>
+                  <button className="text-[10px] text-primary hover:underline" onClick={() => setSelectedModels(new Set())}>None</button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-[200px] overflow-y-auto">
+                {models.map((m) => {
+                  const provider = getProviderTag(m.id);
+                  return (
+                    <div key={m.id} className="flex items-center gap-1.5 text-xs py-0.5">
+                      <Checkbox
+                        checked={selectedModels.has(m.id)}
+                        onCheckedChange={(checked) => {
+                          if (checked) setSelectedModels((p) => new Set([...p, m.id]));
+                          else setSelectedModels((p) => { const n = new Set(p); n.delete(m.id); return n; });
+                        }}
+                        className="size-4 shrink-0"
+                      >
+                        {selectedModels.has(m.id) && <CheckboxIndicator className="size-3" />}
+                      </Checkbox>
+                      <span className="truncate cursor-pointer" onClick={() => toggleModel(m.id)}>{m.name}</span>
+                      <span className={`text-[8px] px-0.5 rounded-sm leading-none shrink-0 ${provider === "Cline" ? "bg-emerald-500/15 text-emerald-500" : "bg-amber-500/15 text-amber-500"}`}>
+                        {provider === "Cline" ? "CL" : "CB"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <span className="text-[10px] text-muted-foreground">{selectedModels.size} of {models.length} selected</span>
+            </div>
+          )}
+
           {integration.configType === "guide" && integration.guideSteps && (
             <div className="flex flex-col gap-2 mt-1">
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Setup Steps</span>
@@ -271,14 +323,12 @@ function ManualConfigPanel() {
   const currentTool = configurableTools.find((t) => t.id === selectedTool);
   const { map, setSlot } = useModelMap(currentTool?.modelSlots);
 
-  // Default to first tool
   useEffect(() => {
     if (!selectedTool && configurableTools.length > 0) {
       setSelectedTool(configurableTools[0].id);
     }
   }, [configurableTools, selectedTool]);
 
-  // Regenerate config when tool or model map changes
   useEffect(() => {
     if (!selectedTool) return;
     let cancelled = false;
@@ -307,7 +357,6 @@ function ManualConfigPanel() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Tool selector */}
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium text-muted-foreground">Tool:</span>
         <Select value={selectedTool} onValueChange={(v) => v && setSelectedTool(v)}>
@@ -322,7 +371,6 @@ function ManualConfigPanel() {
         </Select>
       </div>
 
-      {/* Per-slot model selectors */}
       {currentTool?.modelSlots && currentTool.modelSlots.length > 0 && (
         <Card>
           <CardHeader>
@@ -342,7 +390,6 @@ function ManualConfigPanel() {
         </Card>
       )}
 
-      {/* Generated config */}
       {loading ? (
         <div className="flex justify-center py-12">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -385,7 +432,6 @@ export default function IntegrationPage() {
     <>
       <PageHeader title="Integration" subtitle="Auto-bind Hexos to your AI coding tools" />
 
-      {/* Tab switcher */}
       <div className="mb-6">
         <div className="flex items-center gap-1 rounded-sm bg-muted p-1 w-fit">
           {TABS.map((tab) => (

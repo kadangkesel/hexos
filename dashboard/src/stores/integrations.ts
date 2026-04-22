@@ -23,6 +23,7 @@ export interface Integration {
   envVars?: Record<string, string>;
   guideSteps?: string[];
   modelSlots?: ModelSlot[];
+  showModelCheckboxes?: boolean;
 }
 
 export interface GeneratedConfig {

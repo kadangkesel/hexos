@@ -29,7 +29,7 @@ CODEBUDDY_BASE_URL = os.getenv("HEXOS_CODEBUDDY_BASE_URL", "https://www.codebudd
 CODEBUDDY_PLATFORM = "CLI"
 CODEBUDDY_REDIRECT_SCHEME = "codebuddy://"
 POLL_INTERVAL = 2.0
-POLL_TIMEOUT = 180.0
+POLL_TIMEOUT = 90.0
 AUTH_LOOP_MAX_ITERATIONS = 200
 DEBUG = os.getenv("HEXOS_DEBUG", "false").lower() == "true"
 
@@ -312,10 +312,84 @@ async def _wait_for_transition(page, check_fn: str, timeout: int = 10000):
         pass
 
 
+async def _handle_page_expired(page, progress=None) -> bool:
+    """Detect 'Page has expired' and click the restart link.
+
+    Returns True if the expired page was detected and handled.
+    The page text is:
+        "Page has expired"
+        "To restart the login process Click here."
+        "To continue the login process Click here."
+    We click the *restart* link (first <a> tag) to get a fresh session.
+    """
+    try:
+        expired_loc = page.get_by_text("Page has expired", exact=False)
+        if await expired_loc.count() == 0:
+            return False
+        if not await expired_loc.first.is_visible(timeout=2000):
+            return False
+    except Exception:
+        return False
+
+    if progress:
+        progress("navigate", "Page expired detected, clicking restart link...")
+
+    # The page has two "Click here" links. The first one is "restart", the
+    # second is "continue".  Target the restart link specifically by looking
+    # for the <a> inside the paragraph that contains "restart".
+    clicked = False
+
+    # Try 1: click the <a> tag inside the "restart" sentence
+    try:
+        restart_p = page.get_by_text("restart the login process", exact=False).first
+        if await restart_p.is_visible(timeout=1500):
+            # The <a> is a child — use locator chaining
+            link = restart_p.locator("a").first
+            if await link.count() > 0 and await link.is_visible(timeout=1000):
+                await link.click(timeout=3000)
+                clicked = True
+    except Exception:
+        pass
+
+    # Try 2: query_selector for the first <a> on the page (restart link)
+    if not clicked:
+        try:
+            first_link = await page.query_selector("a[href]")
+            if first_link and await first_link.is_visible():
+                await first_link.click(timeout=3000)
+                clicked = True
+        except Exception:
+            pass
+
+    # Try 3: click any link with "Click here" text (first match = restart)
+    if not clicked:
+        try:
+            link = page.get_by_role("link", name="Click here").first
+            if await link.is_visible(timeout=1500):
+                await link.click(timeout=3000)
+                clicked = True
+        except Exception:
+            pass
+
+    if clicked:
+        # Wait for navigation to complete
+        await asyncio.sleep(2.5)
+        return True
+
+    # If none of the links worked, do NOT reload (reload causes expired loop).
+    # Just return True so the caller knows we saw the expired page and can
+    # let the next iteration try again.
+    return True
+
+
 async def _handle_codebuddy_landing(page) -> bool:
-    """Handle the CodeBuddy login landing page: click ToS checkbox + Google button."""
-    # First try iframe
-    frame = None
+    """Handle the CodeBuddy login landing page: click ToS checkbox + Google button.
+
+    Uses query_selector / get_by_text instead of page.evaluate() to avoid
+    Camoufox hangs.
+    """
+    # Determine target: iframe or main page
+    target = page
     for selector in [
         'iframe[title="login-iframe"]',
         'iframe[src*="/auth/realms/copilot/protocol/openid-connect/auth"]',
@@ -325,84 +399,67 @@ async def _handle_codebuddy_landing(page) -> bool:
             if iframe_el:
                 frame = await iframe_el.content_frame()
                 if frame:
+                    target = frame
                     break
         except Exception:
             continue
 
-    target = frame if frame else page
-
     clicked_checkbox = False
     clicked_google = False
 
-    # Click ToS checkbox
+    # Click ToS checkbox (div.checkmark)
     try:
-        clicked_checkbox = bool(
-            await target.evaluate(
-                """() => {
-                    const el = document.querySelector('div.checkmark');
-                    if (!el || el.offsetParent === null) return false;
-                    el.click();
-                    return true;
-                }"""
-            )
-        )
+        chk = await target.query_selector("div.checkmark")
+        if chk and await chk.is_visible():
+            await chk.click(timeout=3000)
+            clicked_checkbox = True
+            await asyncio.sleep(0.3)
     except Exception:
         pass
 
-    # Click Google login button
+    # Also try input[type=checkbox] or label with checkbox
+    if not clicked_checkbox:
+        for sel in ["input[type='checkbox']", "label.checkbox", "span.checkmark"]:
+            try:
+                el = await target.query_selector(sel)
+                if el and await el.is_visible():
+                    await el.click(timeout=3000)
+                    clicked_checkbox = True
+                    await asyncio.sleep(0.3)
+                    break
+            except Exception:
+                continue
+
+    # Click Google login button by id
     try:
-        clicked_google = bool(
-            await target.evaluate(
-                """() => {
-                    const byId = document.querySelector('#social-google');
-                    if (byId && byId.offsetParent !== null) {
-                        byId.click();
-                        return true;
-                    }
-                    for (const a of document.querySelectorAll('a[href*="/broker/google/login"]')) {
-                        const txt = (a.textContent || '').toLowerCase();
-                        if (txt.includes('google') && a.offsetParent !== null) {
-                            a.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }"""
-            )
-        )
+        google_btn = await target.query_selector("#social-google")
+        if google_btn and await google_btn.is_visible():
+            await google_btn.click(timeout=3000)
+            clicked_google = True
     except Exception:
         pass
 
-    # Fallback: look for Google sign-in button on page
-    if not clicked_google and not clicked_checkbox:
+    # Click Google login link by href
+    if not clicked_google:
         try:
-            clicked_google = bool(
-                await page.evaluate(
-                    """() => {
-                        const googlePhrases = ['sign in with google', 'login with google', 'continue with google'];
-                        for (const btn of document.querySelectorAll('button, a, div[role="button"]')) {
-                            if (btn.offsetParent === null) continue;
-                            const txt = (btn.textContent || '').toLowerCase().trim();
-                            if (googlePhrases.some(p => txt.includes(p))) {
-                                btn.click();
-                                return true;
-                            }
-                        }
-                        const loginPhrases = ['login', 'sign in', 'log in'];
-                        for (const a of document.querySelectorAll('a, button')) {
-                            if (a.offsetParent === null) continue;
-                            const txt = (a.textContent || '').toLowerCase().trim();
-                            if (loginPhrases.some(p => txt === p)) {
-                                a.click();
-                                return true;
-                            }
-                        }
-                        return false;
-                    }"""
-                )
-            )
+            google_link = await target.query_selector('a[href*="/broker/google/login"]')
+            if google_link and await google_link.is_visible():
+                await google_link.click(timeout=3000)
+                clicked_google = True
         except Exception:
             pass
+
+    # Fallback: find button/link with Google-related text
+    if not clicked_google:
+        for phrase in ["Sign in with Google", "Login with Google", "Continue with Google", "Google"]:
+            try:
+                loc = target.get_by_text(phrase, exact=False).first
+                if await loc.is_visible(timeout=1500):
+                    await loc.click(timeout=3000)
+                    clicked_google = True
+                    break
+            except Exception:
+                continue
 
     return clicked_checkbox or clicked_google
 
@@ -416,24 +473,29 @@ async def _handle_google_consent(page) -> bool:
     if "accounts.google.com" not in current_url:
         return False
 
-    try:
-        return bool(
-            await page.evaluate(
-                """() => {
-                    for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-                        const txt = (btn.textContent || '').trim().toLowerCase();
-                        if (!txt || btn.offsetParent === null) continue;
-                        if (txt === 'continue' || txt.includes('allow') || txt.includes('lanjut')) {
-                            btn.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }"""
-            )
-        )
-    except Exception:
-        return False
+    # Try multiple selectors for consent/continue/allow buttons
+    for text in ["Continue", "Allow", "Lanjutkan", "Izinkan", "continue", "allow"]:
+        try:
+            btn = page.get_by_text(text, exact=False).first
+            if await btn.count() > 0 and await btn.is_visible():
+                await btn.click(force=True)
+                debug(f"Clicked consent button: {text}")
+                return True
+        except Exception:
+            pass
+
+    # Fallback: try specific selectors
+    for selector in ['button[type="submit"]', '#submit_approve_access', 'button:has-text("Continue")', 'button:has-text("Lanjutkan")']:
+        try:
+            el = await page.query_selector(selector)
+            if el and await el.is_visible():
+                await el.click(force=True)
+                debug(f"Clicked consent via selector: {selector}")
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 async def _handle_google_gaplustos(page) -> bool:
@@ -467,26 +529,16 @@ async def _handle_google_gaplustos(page) -> bool:
             except Exception:
                 continue
 
-        return bool(
-            await page.evaluate(
-                """() => {
-                    const candidates = [
-                        document.querySelector('#confirm'),
-                        document.querySelector('input[name="confirm"]'),
-                        ...Array.from(document.querySelectorAll('input[type="submit"], button'))
-                    ];
-                    for (const el of candidates) {
-                        if (!el || el.offsetParent === null) continue;
-                        const txt = (el.value || el.textContent || '').toLowerCase().trim();
-                        if (txt.includes('mengerti') || txt.includes('understand') || txt.includes('confirm')) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }"""
-            )
-        )
+        # Fallback: try text-based buttons
+        for text in ["I understand", "Mengerti", "Confirm", "Saya mengerti"]:
+            try:
+                btn = page.get_by_text(text, exact=False).first
+                if await btn.count() > 0 and await btn.is_visible():
+                    await btn.click(force=True)
+                    return True
+            except Exception:
+                pass
+        return False
     except Exception:
         return False
 
@@ -631,22 +683,14 @@ async def _handle_codebuddy_region(page) -> bool:
 
 async def _click_continue_button(target) -> None:
     """Click any generic continue/next button."""
-    try:
-        await target.evaluate(
-            """() => {
-                const keywords = ['next', 'continue', 'accept', 'i understand', 'agree', 'ok', 'got it', 'login', 'sign in'];
-                for (const btn of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
-                    const txt = (btn.textContent || btn.value || '').toLowerCase().trim();
-                    if (!txt) continue;
-                    if (keywords.some(k => txt.includes(k)) && btn.offsetParent !== null) {
-                        btn.click();
-                        return;
-                    }
-                }
-            }"""
-        )
-    except Exception:
-        pass
+    for text in ["Continue", "Next", "Accept", "I understand", "Agree", "OK", "Got it", "Login", "Sign in", "Lanjutkan", "Berikutnya"]:
+        try:
+            btn = target.get_by_text(text, exact=False).first
+            if await btn.count() > 0 and await btn.is_visible():
+                await btn.click(force=True)
+                return
+        except Exception:
+            pass
 
 
 async def _is_email_step(page) -> bool:
@@ -858,9 +902,17 @@ async def poll_token(state: str) -> dict:
                 ) as resp:
                     data = await resp.json()
                     if data.get("code") == 0 and data.get("data", {}).get("accessToken"):
+                        token_data = data["data"]
+                        access = token_data["accessToken"]
+                        refresh = token_data.get("refreshToken", "")
+                        debug(f"Token poll success: accessToken={access[:20]}... refreshToken={'present (' + refresh[:20] + '...)' if refresh else 'EMPTY'}")
+                        debug(f"Token poll response keys: {list(token_data.keys())}")
+                        if not refresh:
+                            # Log full response to help debug missing refresh token
+                            progress("warn_no_refresh", f"WARNING: No refreshToken in poll response. Keys: {list(token_data.keys())}")
                         return {
-                            "accessToken": data["data"]["accessToken"],
-                            "refreshToken": data["data"].get("refreshToken", ""),
+                            "accessToken": access,
+                            "refreshToken": refresh,
                         }
                     # 11217 = still waiting for auth
                     if data.get("code") != 11217:
@@ -1022,6 +1074,7 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
         "os": "windows",
         "block_webrtc": True,
         "disable_coop": True,
+        "i_know_what_im_doing": True,
         "humanize": False,
         "screen": Screen(max_width=1920, max_height=1080),
     }
@@ -1036,7 +1089,6 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
         if parsed.password:
             proxy_cfg["password"] = parsed.password
         camoufox_kwargs["proxy"] = proxy_cfg
-        camoufox_kwargs["geoip"] = True
         progress("proxy", f"Using proxy: {parsed.hostname}:{parsed.port}")
 
     progress("browser_launch", "Launching Camoufox browser...")
@@ -1047,11 +1099,23 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
 
     try:
         browser = await manager.__aenter__()
+        context = browser.contexts[0] if browser.contexts else None
+
+        # Clear any leftover cookies/storage from previous (killed) sessions
+        if context:
+            try:
+                await context.clear_cookies()
+            except Exception:
+                pass
+
         page = await browser.new_page()
         page.set_default_timeout(15000)
 
         progress("navigate", f"Navigating to CodeBuddy auth page...")
         await page.goto(auth_url, wait_until="domcontentloaded", timeout=20000)
+
+        # Detect "page has expired" and click the restart link
+        await _handle_page_expired(page, progress)
 
         # Step 1: Handle CodeBuddy landing (checkbox + Google button)
         progress("landing", "Handling CodeBuddy login page...")
@@ -1089,6 +1153,8 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
 
         auth_success = False
         last_debug_url = ""
+        expired_retries = 0
+        MAX_EXPIRED_RETRIES = 5
 
         for iteration in range(AUTH_LOOP_MAX_ITERATIONS):
             
@@ -1222,7 +1288,26 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
 
             # Handle CodeBuddy /auth/realms/ keycloak pages
             if on_codebuddy and "/auth/realms/" in current_path:
+                # Check for "Page has expired" (keycloak session timeout)
+                if await _handle_page_expired(page, progress):
+                    expired_retries += 1
+                    if expired_retries >= MAX_EXPIRED_RETRIES:
+                        progress("error", f"Page expired {expired_retries} times, giving up")
+                        break
+                    await asyncio.sleep(1.0)
+                    continue
+                # Reset counter when we see a non-expired keycloak page
+                expired_retries = 0
                 await _handle_codebuddy_landing(page)
+                await asyncio.sleep(1.0)
+                continue
+
+            # Detect "Page has expired" on any CodeBuddy page
+            if on_codebuddy and await _handle_page_expired(page, progress):
+                expired_retries += 1
+                if expired_retries >= MAX_EXPIRED_RETRIES:
+                    progress("error", f"Page expired {expired_retries} times, giving up")
+                    break
                 await asyncio.sleep(1.0)
                 continue
 
@@ -1280,16 +1365,11 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
             token_result = await poll_token(state)
 
         if "error" in token_result:
-            # Still failed - but auth DID succeed in browser
-            # Fetch credit via browser and return partial success with empty token
-            progress("poll_fallback", "Token unavailable, saving account with browser session...")
-            credit = await fetch_credit_via_page(page)
-            if credit:
-                remain = credit.get("remainingCredits", 0)
-                total = credit.get("totalCredits", 0)
-                progress("credit_info", f"Credits: {remain:.0f}/{total:.0f}")
-            # Return success with empty tokens - account can be refreshed later
-            result_success("", "", "", credit)
+            # Token poll failed even after retry — report as failure
+            # Do NOT return success with empty tokens (causes broken connections in DB)
+            err_msg = token_result.get("error", "Token poll failed")
+            progress("poll_failed", f"Token poll failed: {err_msg}")
+            result_failure(f"Token poll failed after retry: {err_msg}")
             return
 
         access_token = token_result["accessToken"]

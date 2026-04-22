@@ -180,16 +180,19 @@ export default function DashboardPage() {
     return remaining === 0;
   });
 
-  const totalCredits = connections.reduce((sum, c) => {
-    const credit = c.credit as Record<string, unknown> | undefined;
-    return sum + (Number(credit?.totalCredits) || 0);
-  }, 0);
-  const usedCredits = connections.reduce((sum, c) => {
-    const credit = c.credit as Record<string, unknown> | undefined;
-    return sum + (Number(credit?.usedCredits) || 0);
-  }, 0);
-  const remainingCredits = totalCredits - usedCredits;
-  const usedPercent = totalCredits > 0 ? (usedCredits / totalCredits) * 100 : 0;
+  // Split credits by provider
+  const cbConns = connections.filter((c) => String((c as any).provider ?? "codebuddy") === "codebuddy");
+  const clConns = connections.filter((c) => String((c as any).provider) === "cline");
+
+  const cbTotal = cbConns.reduce((s, c) => s + (Number((c.credit as any)?.totalCredits) || 0), 0);
+  const cbUsed = cbConns.reduce((s, c) => s + (Number((c.credit as any)?.usedCredits) || 0), 0);
+  const cbRemaining = cbTotal - cbUsed;
+  const cbPercent = cbTotal > 0 ? (cbUsed / cbTotal) * 100 : 0;
+
+  const clTotal = clConns.reduce((s, c) => s + (Number((c.credit as any)?.totalCredits) || 0), 0);
+  const clUsed = clConns.reduce((s, c) => s + (Number((c.credit as any)?.usedCredits) || 0), 0);
+  const clRemaining = clTotal - clUsed;
+  const clPercent = clTotal > 0 ? (clUsed / clTotal) * 100 : 0;
 
   /* ---- fetch on mount + auto-refresh every 30s ---- */
   const refresh = useCallback(() => {
@@ -320,37 +323,52 @@ export default function DashboardPage() {
         transition={{ delay: 0.55 }}
         className="mb-6"
       >
-        {/* Credits progress */}
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-start gap-3 mb-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-500">
-                <Coins className="h-4 w-4" />
-              </div>
-              <div>
-                <p className="text-xs font-medium text-muted-foreground">Credits</p>
-                <p className="text-[10px] text-muted-foreground/70">Remaining balance across accounts</p>
-              </div>
-            </div>
-            <p className="text-lg font-bold">
-              {usedCredits.toFixed(1)}{" "}
-              <span className="text-muted-foreground font-normal text-sm">/ {totalCredits.toFixed(1)}</span>
-            </p>
-            <div className="w-full h-2 bg-muted rounded-full mt-2 overflow-hidden">
-              <div
-                className={cn(
-                  "h-full rounded-full transition-all duration-500",
-                  usedPercent > 80 ? "bg-destructive" : usedPercent > 50 ? "bg-yellow-500" : "bg-primary"
-                )}
-                style={{ width: `${Math.min(usedPercent, 100)}%` }}
-              />
-            </div>
-            <div className="flex justify-between mt-1.5">
-              <span className="text-[10px] text-muted-foreground">{usedPercent.toFixed(1)}% used</span>
-              <span className="text-[10px] text-muted-foreground">{remainingCredits.toFixed(1)} remaining</span>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Credits by provider */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* CodeBuddy credits */}
+          {cbConns.length > 0 && (
+            <Card>
+              <CardContent className="pt-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-500">
+                    <Coins className="h-3.5 w-3.5" />
+                  </div>
+                  <p className="text-xs font-medium text-muted-foreground">CodeBuddy Credits</p>
+                </div>
+                <p className="text-lg font-bold">
+                  {cbUsed.toFixed(1)}{" "}
+                  <span className="text-muted-foreground font-normal text-sm">/ {cbTotal.toFixed(1)}</span>
+                </p>
+                <div className="w-full h-1.5 bg-muted rounded-full mt-1.5 overflow-hidden">
+                  <div className={cn("h-full rounded-full transition-all duration-500", cbPercent > 80 ? "bg-destructive" : "bg-primary")} style={{ width: `${Math.min(cbPercent, 100)}%` }} />
+                </div>
+                <span className="text-[10px] text-muted-foreground">{cbRemaining.toFixed(1)} remaining</span>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Cline credits */}
+          {clConns.length > 0 && (
+            <Card>
+              <CardContent className="pt-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-violet-500/10 text-violet-500">
+                    <Coins className="h-3.5 w-3.5" />
+                  </div>
+                  <p className="text-xs font-medium text-muted-foreground">Cline Credits</p>
+                </div>
+                <p className="text-lg font-bold">
+                  {clRemaining >= 1000 ? `${(clRemaining / 1000).toFixed(1)}K` : clRemaining.toFixed(0)}{" "}
+                  <span className="text-muted-foreground font-normal text-sm">/ {clTotal >= 1000 ? `${(clTotal / 1000).toFixed(1)}K` : clTotal.toFixed(0)}</span>
+                </p>
+                <div className="w-full h-1.5 bg-muted rounded-full mt-1.5 overflow-hidden">
+                  <div className={cn("h-full rounded-full transition-all duration-500", clPercent > 80 ? "bg-destructive" : "bg-violet-500")} style={{ width: `${Math.min(clPercent, 100)}%` }} />
+                </div>
+                <span className="text-[10px] text-muted-foreground">{clRemaining >= 1000 ? `${(clRemaining / 1000).toFixed(1)}K` : clRemaining.toFixed(0)} remaining</span>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       </motion.div>
 
       {/* ---- Token Usage Chart ---- */}
