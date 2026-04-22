@@ -120,20 +120,19 @@ def extract_code_from_kiro_url(url: str) -> str | None:
 
 # ---------------------------------------------------------------------------
 # Google OAuth form helpers
-# Uses page.query_selector() / page.get_by_text() — NOT page.evaluate()
-# (page.evaluate hangs in Camoufox)
+# Ported from login.py (CodeBuddy) — proven working approach.
+# Uses wait_for_selector + Locator API consistently.
+# Does NOT use page.evaluate() (hangs in Camoufox).
 # ---------------------------------------------------------------------------
 
 
 async def _is_email_step(page) -> bool:
     """Detect Google email input step."""
     try:
-        el = await page.query_selector("#identifierId")
-        if el and await el.is_visible():
-            return True
-        el = await page.query_selector('input[type="email"]')
-        if el and await el.is_visible():
-            return True
+        for sel in ["#identifierId", 'input[type="email"]', 'input[name="identifier"]']:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                return True
     except Exception:
         pass
     return False
@@ -151,28 +150,66 @@ async def _is_password_step(page) -> bool:
     return False
 
 
+async def _click_google_next(page) -> bool:
+    """Click the Google Next/Submit button. Tries multiple selectors."""
+    for sel in [
+        "#identifierNext button",
+        "#passwordNext button",
+        "#identifierNext",
+        "#passwordNext",
+    ]:
+        try:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                await el.click(force=True)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 async def _fill_google_email(page, email: str) -> bool:
-    """Fill Google email and submit."""
+    """Fill Google email and submit. Uses wait_for_selector for reliability."""
+    selectors = [
+        "#identifierId",
+        'input[type="email"]',
+        'input[name="identifier"]',
+        'input[autocomplete="username"]',
+    ]
+
+    # Wait for any email input to become visible
+    found_selector = None
+    for selector in selectors:
+        try:
+            await page.wait_for_selector(selector, state="visible", timeout=3000)
+            found_selector = selector
+            break
+        except Exception:
+            continue
+
+    if not found_selector:
+        debug("No email input found after waiting")
+        return False
+
     try:
-        el = await page.query_selector("#identifierId")
-        if not el or not await el.is_visible():
+        locator = page.locator(found_selector).first
+        if await locator.count() == 0 or not await locator.is_visible():
             return False
 
-        await el.scroll_into_view_if_needed()
-        await el.click(force=True)
+        await locator.scroll_into_view_if_needed()
+        await locator.click(force=True)
         await asyncio.sleep(0.2)
 
         # Clear existing text
         try:
-            await el.press("Control+a")
-            await el.press("Backspace")
+            await locator.press("Control+a")
+            await locator.press("Backspace")
         except Exception:
             pass
 
         # Type email
-        locator = page.locator("#identifierId").first
         await locator.press_sequentially(email, delay=60)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.5)
 
         # Verify
         value = await locator.input_value()
@@ -180,14 +217,24 @@ async def _fill_google_email(page, email: str) -> bool:
             debug(f"Email mismatch: typed={value!r}")
             return False
 
-        # Click Next
-        next_btn = await page.query_selector("#identifierNext button")
-        if next_btn and await next_btn.is_visible():
-            await next_btn.click()
-        else:
-            await el.press("Enter")
+        await asyncio.sleep(0.3)
 
-        await asyncio.sleep(2.0)
+        # Click Next
+        clicked = await _click_google_next(page)
+        if not clicked:
+            await locator.press("Enter")
+
+        # Wait for transition (password field appears or email field disappears)
+        try:
+            await page.wait_for_selector(
+                'input[name="Passwd"], input[type="password"]',
+                state="visible",
+                timeout=10000,
+            )
+        except Exception:
+            # May have transitioned to something else (account picker, consent, etc.)
+            await asyncio.sleep(2.0)
+
         return True
     except Exception as exc:
         debug(f"Email fill error: {exc}")
@@ -195,40 +242,65 @@ async def _fill_google_email(page, email: str) -> bool:
 
 
 async def _fill_google_password(page, password: str) -> bool:
-    """Fill Google password and submit."""
-    try:
-        el = None
-        for sel in ['input[name="Passwd"]', 'input[type="password"]']:
-            el = await page.query_selector(sel)
-            if el and await el.is_visible():
-                break
-            el = None
+    """Fill Google password and submit. Uses wait_for_selector for reliability."""
+    selectors = ['input[name="Passwd"]', 'input[type="password"]']
 
-        if not el:
+    found_selector = None
+    for selector in selectors:
+        try:
+            await page.wait_for_selector(selector, state="visible", timeout=5000)
+            found_selector = selector
+            break
+        except Exception:
+            continue
+
+    if not found_selector:
+        debug("No password input found after waiting")
+        return False
+
+    try:
+        locator = page.locator(found_selector).first
+        if await locator.count() == 0 or not await locator.is_visible():
             return False
 
-        await el.scroll_into_view_if_needed()
-        await el.click(force=True)
+        await locator.scroll_into_view_if_needed()
+        await locator.click(force=True)
         await asyncio.sleep(0.2)
 
+        # Clear
         try:
-            await el.press("Control+a")
-            await el.press("Backspace")
+            await locator.press("Control+a")
+            await locator.press("Backspace")
         except Exception:
             pass
 
-        locator = page.locator(sel).first
+        # Type password
         await locator.press_sequentially(password, delay=70)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.5)
 
         # Click Next
-        next_btn = await page.query_selector("#passwordNext button")
-        if next_btn and await next_btn.is_visible():
-            await next_btn.click()
-        else:
-            await el.press("Enter")
+        clicked = await _click_google_next(page)
+        if not clicked:
+            await locator.press("Enter")
 
-        await asyncio.sleep(3.0)
+        # Wait for transition (leave Google or reach consent/challenge)
+        try:
+            await page.wait_for_function(
+                """() => {
+                    const host = window.location.host || '';
+                    const path = window.location.pathname || '';
+                    const hasPwd = Array.from(
+                        document.querySelectorAll('input[name="Passwd"], input[type="password"]')
+                    ).some(el => el.offsetParent !== null);
+                    if (!host.includes('accounts.google.com')) return true;
+                    if (!path.includes('/challenge/pwd')) return true;
+                    return !hasPwd;
+                }""",
+                timeout=12000,
+            )
+        except Exception:
+            await asyncio.sleep(3.0)
+
         return True
     except Exception as exc:
         debug(f"Password fill error: {exc}")
@@ -236,13 +308,17 @@ async def _fill_google_password(page, password: str) -> bool:
 
 
 async def _handle_google_consent(page) -> bool:
-    """Handle Google consent/continue page."""
+    """Handle Google consent/continue page. Only runs on consent-specific URLs."""
     try:
         current_url = page.url
         if "accounts.google.com" not in current_url:
             return False
+        # Only handle actual consent pages, not email/password pages
+        parsed = urlparse(current_url)
+        path = parsed.path.lower()
+        if "/signin/identifier" in path or "/challenge/pwd" in path:
+            return False
 
-        # Try common consent buttons
         for text in ["Continue", "Allow", "Lanjutkan", "I agree"]:
             try:
                 btn = page.get_by_text(text, exact=False).first
@@ -271,7 +347,6 @@ async def _handle_google_gaplustos(page) -> bool:
                 debug(f"gaplustos clicked: {sel}")
                 return True
 
-        # Fallback: try text-based buttons
         for text in ["I understand", "Saya mengerti"]:
             try:
                 btn = page.get_by_text(text, exact=False).first
@@ -302,16 +377,22 @@ async def _click_continue_button(page) -> bool:
 
 
 async def _detect_blocking(page) -> str | None:
-    """Detect Google blocking challenges."""
+    """Detect Google blocking challenges. Excludes normal auth paths."""
     try:
         current_url = page.url
         if "accounts.google.com" not in current_url:
             return None
 
-        # Check URL path for challenge
         parsed = urlparse(current_url)
-        if "/challenge/" in parsed.path:
-            return f"soft:google challenge ({parsed.path})"
+        path = parsed.path
+
+        # Check for challenge paths, but EXCLUDE normal auth steps
+        if "/challenge/" in path:
+            normal_paths = ["/challenge/pwd", "/challenge/selection", "/challenge/ipp"]
+            for np in normal_paths:
+                if np in path:
+                    return None  # Normal auth step, not a block
+            return f"soft:google challenge ({path})"
 
         # Check page text for blocking markers
         markers = [
@@ -626,17 +707,7 @@ async def run_login(email: str, password: str):
                 await asyncio.sleep(0.5)
                 continue
 
-            # Handle Google G+ ToS
-            if on_google and await _handle_google_gaplustos(page):
-                await asyncio.sleep(0.8)
-                continue
-
-            # Handle Google consent
-            if on_google and await _handle_google_consent(page):
-                await asyncio.sleep(0.8)
-                continue
-
-            # Google auth steps
+            # Google auth steps — check email/password FIRST before other handlers
             if on_google:
                 at_password = await _is_password_step(page)
                 at_email = await _is_email_step(page)
@@ -675,6 +746,16 @@ async def run_login(email: str, password: str):
                 if at_email or at_password:
                     await asyncio.sleep(0.6)
                     continue
+
+            # Handle Google G+ ToS (only after email/password check)
+            if on_google and await _handle_google_gaplustos(page):
+                await asyncio.sleep(0.8)
+                continue
+
+            # Handle Google consent (only after email/password check)
+            if on_google and await _handle_google_consent(page):
+                await asyncio.sleep(0.8)
+                continue
 
             # Detect blocking
             if on_google:
