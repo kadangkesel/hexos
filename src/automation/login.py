@@ -65,7 +65,7 @@ def error(message: str):
     emit({"type": "error", "error": message})
 
 
-def result_success(access_token: str, refresh_token: str, uid: str, credit: dict | None = None):
+def result_success(access_token: str, refresh_token: str, uid: str, credit: dict | None = None, web_cookie: str | None = None):
     data = {
         "type": "result",
         "success": True,
@@ -75,6 +75,8 @@ def result_success(access_token: str, refresh_token: str, uid: str, credit: dict
     }
     if credit:
         data["credit"] = credit
+    if web_cookie:
+        data["webCookie"] = web_cookie
     emit(data)
 
 
@@ -925,6 +927,30 @@ async def poll_token(state: str) -> dict:
     return {"error": "Token poll timeout"}
 
 
+async def extract_web_cookies(context) -> str:
+    """Extract cookies from browser context as a Cookie header string.
+    
+    These cookies can be replayed later to call the billing API
+    without needing a full browser session.
+    """
+    try:
+        cookies = await context.cookies()
+        # Filter to Service domain cookies only
+        cb_cookies = [c for c in cookies if "Service" in (c.get("domain", "") or "")]
+        if not cb_cookies:
+            cb_cookies = cookies  # fallback: use all cookies
+        parts = []
+        for c in cb_cookies:
+            name = c.get("name", "")
+            value = c.get("value", "")
+            if name and value:
+                parts.append(f"{name}={value}")
+        return "; ".join(parts)
+    except Exception as exc:
+        debug(f"Cookie extraction error: {exc}")
+        return ""
+
+
 async def fetch_credit_via_page(page) -> dict | None:
     """Fetch credit/quota info via browser page (uses cookie session).
     
@@ -1399,7 +1425,14 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
         else:
             progress("credit_info", "Could not fetch credit info (will retry via API)")
 
-        result_success(access_token, refresh_token, uid, credit)
+        # Step 6: Extract web cookies for future credit refresh (without browser)
+        web_cookie = ""
+        if context:
+            web_cookie = await extract_web_cookies(context)
+            if web_cookie:
+                debug(f"Extracted {len(web_cookie)} chars of web cookies")
+
+        result_success(access_token, refresh_token, uid, credit, web_cookie or None)
 
     except Exception as exc:
         result_failure(f"Browser automation error: {exc}")

@@ -39,6 +39,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import yaml from "js-yaml";
 import { Checkbox, CheckboxIndicator } from "@/components/animate-ui/primitives/base/checkbox";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
@@ -71,11 +72,23 @@ function copyToClipboard(text: string, label = "Copied") {
 /*  Helpers: model ID format                                           */
 /* ------------------------------------------------------------------ */
 
-// All tools use cb/ or cl/ prefix - no stripping needed
 function getProviderTag(id: string): string {
   if (id.startsWith("cl/")) return "Cline";
+  if (id.startsWith("kr/")) return "Kiro";
   return "CodeBuddy";
 }
+
+const PROVIDER_BADGE: Record<string, string> = {
+  CodeBuddy: "bg-amber-500/15 text-amber-500",
+  Cline: "bg-emerald-500/15 text-emerald-500",
+  Kiro: "bg-sky-500/15 text-sky-500",
+};
+
+const PROVIDER_SHORT: Record<string, string> = {
+  CodeBuddy: "CB",
+  Cline: "CL",
+  Kiro: "KR",
+};
 
 /* ------------------------------------------------------------------ */
 /*  Tabs                                                               */
@@ -108,11 +121,9 @@ function SlotSelector({
     return { value: m.id, label: m.name, provider };
   });
 
-  // Sort: CodeBuddy first, then Cline
-  options.sort((a, b) => {
-    if (a.provider === b.provider) return 0;
-    return a.provider === "CodeBuddy" ? -1 : 1;
-  });
+  // Sort: CodeBuddy first, then Cline, then Kiro
+  const order = ["CodeBuddy", "Cline", "Kiro"];
+  options.sort((a, b) => order.indexOf(a.provider) - order.indexOf(b.provider));
 
   return (
     <div className="flex items-center gap-3">
@@ -128,7 +139,7 @@ function SlotSelector({
             <SelectItem key={o.value} value={o.value}>
               <span className="flex items-center gap-1.5">
                 {o.label}
-                <span className={`text-[9px] px-1 py-0.5 rounded-sm leading-none ${o.provider === "Cline" ? "bg-emerald-500/15 text-emerald-500" : "bg-amber-500/15 text-amber-500"}`}>
+                <span className={`text-[9px] px-1 py-0.5 rounded-sm leading-none ${PROVIDER_BADGE[o.provider] ?? "bg-muted text-muted-foreground"}`}>
                   {o.provider}
                 </span>
               </span>
@@ -271,8 +282,8 @@ function IntegrationCard({ integration, index }: { integration: Integration; ind
                         {selectedModels.has(m.id) && <CheckboxIndicator className="size-3" />}
                       </Checkbox>
                       <span className="truncate cursor-pointer" onClick={() => toggleModel(m.id)}>{m.name}</span>
-                      <span className={`text-[8px] px-0.5 rounded-sm leading-none shrink-0 ${provider === "Cline" ? "bg-emerald-500/15 text-emerald-500" : "bg-amber-500/15 text-amber-500"}`}>
-                        {provider === "Cline" ? "CL" : "CB"}
+                      <span className={`text-[8px] px-0.5 rounded-sm leading-none shrink-0 ${PROVIDER_BADGE[provider] ?? "bg-muted text-muted-foreground"}`}>
+                        {PROVIDER_SHORT[provider] ?? provider}
                       </span>
                     </div>
                   );
@@ -318,6 +329,7 @@ function ManualConfigPanel() {
   const [selectedTool, setSelectedTool] = useState("");
   const [configCodes, setConfigCodes] = useState<Record<string, string> | null>(null);
   const [configPath, setConfigPath] = useState("");
+  const [configLang, setConfigLang] = useState<string>("json");
   const [loading, setLoading] = useState(false);
 
   const currentTool = configurableTools.find((t) => t.id === selectedTool);
@@ -339,11 +351,17 @@ function ManualConfigPanel() {
       if (cancelled) return;
       if (result?.config) {
         const filename = currentTool?.configPath.split(/[/\\]/).pop() ?? "config.json";
-        setConfigCodes({ [filename]: JSON.stringify(result.config, null, 2) });
+        const isYaml = filename.endsWith(".yaml") || filename.endsWith(".yml");
+        const formatted = isYaml
+          ? yaml.dump(result.config, { lineWidth: -1, noRefs: true })
+          : JSON.stringify(result.config, null, 2);
+        setConfigCodes({ [filename]: formatted });
         setConfigPath(result.configPath);
+        setConfigLang(isYaml ? "yaml" : "json");
       } else {
         setConfigCodes(null);
         setConfigPath("");
+        setConfigLang("json");
       }
       setLoading(false);
     });
@@ -396,7 +414,7 @@ function ManualConfigPanel() {
         </div>
       ) : configCodes ? (
         <div className="flex flex-col gap-3">
-          <CodeTabs codes={configCodes} lang="json" />
+          <CodeTabs codes={configCodes} lang={configLang} />
           {configPath && (
             <div className="flex items-center gap-2">
               <FileCode className="size-3.5 shrink-0 text-muted-foreground" />

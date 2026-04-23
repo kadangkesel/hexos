@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
+
 import {
   Select,
   SelectContent,
@@ -228,11 +228,11 @@ export default function LogsPage() {
 
       {/* Logs table */}
       {records.length > 0 && (
-        <Card className="px-6">
-          <ScrollArea className="max-h-[600px]">
+        <Card className="overflow-hidden">
+          <div className="overflow-auto max-h-[calc(100vh-16rem)]">
             <TooltipProvider>
               <Table>
-                <TableHeader>
+                <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead>Timestamp</TableHead>
                     <TableHead>Model</TableHead>
@@ -304,7 +304,7 @@ export default function LogsPage() {
                 </TableBody>
               </Table>
             </TooltipProvider>
-          </ScrollArea>
+          </div>
         </Card>
       )}
     </div>

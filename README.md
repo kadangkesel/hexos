@@ -1,8 +1,21 @@
-# Hexos — Lightweight AI API Proxy
+# Hexos — Multi-Provider AI API Proxy
 
-Lightweight AI API proxy with CodeBuddy (Tencent) OAuth support. Routes requests through CodeBuddy's API to access Claude, GPT, Gemini, and more — all via a single OpenAI-compatible endpoint.
+Multi-provider AI API proxy with multi-account management, browser automation, and a Next.js dashboard. Routes requests through CodeBuddy, Cline, and Kiro to access Claude, GPT, Gemini, DeepSeek, and more — all via a single OpenAI-compatible endpoint.
 
-Built with [Bun](https://bun.sh) + [Hono](https://hono.dev) + [lowdb](https://github.com/typicode/lowdb).
+Built with [Bun](https://bun.sh) + [Hono](https://hono.dev) + [lowdb](https://github.com/typicode/lowdb). Dashboard with [Next.js 16](https://nextjs.org) + [Tailwind v4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com).
+
+## Features
+
+- **3 Providers**: CodeBuddy (Tencent), Cline, Kiro (AWS CodeWhisperer)
+- **35+ Models**: Claude Opus/Sonnet/Haiku, GPT-5.x, Gemini, DeepSeek, Kimi, GLM, MiniMax, Qwen, Grok
+- **Multi-Account**: Manage 200+ accounts with automatic least-used load balancing
+- **Worker Pool Concurrency**: Batch login without waiting for slow accounts
+- **Auto Failover**: 401 → token refresh → next account. Tries ALL accounts before failing
+- **Credit Monitoring**: Per-account credit check after each request (dosage-notify API)
+- **Browser Automation**: Camoufox (anti-detect Firefox) for Google OAuth login
+- **Dashboard**: Real-time monitoring, account management, batch operations, usage charts
+- **Tool Integration**: Auto-bind to Claude Code, OpenCode, Open Claw, Cline, Hermes
+- **Context Window**: Per-model context length exposed via `/v1/models` (up to 1M tokens)
 
 ## Install
 
@@ -14,240 +27,144 @@ cd hexos && bun install
 ## Quick Start
 
 ```bash
-# 1. Connect CodeBuddy (one-time)
-bun run src/index.ts auth connect codebuddy
+# 1. Setup automation (one-time)
+bun run src/index.ts auth setup-automation
 
-# 2. Start server
+# 2. Connect accounts
+bun run src/index.ts auth auto-connect --email user@gmail.com --password "pass"
+
+# 3. Start server
 bun run src/index.ts start --port 8080
 
-# 3. (Optional) Create API key
-bun run src/index.ts key create
+# 4. (Optional) Start dashboard
+cd dashboard && bun install && bun dev
 ```
 
-## CLI Commands
+## Providers & Models
 
-```
-hexos start [options]                   Start the proxy server
-  -p, --port <port>                     Port (default: 8080)
-  --host <host>                         Host (default: 127.0.0.1)
+### CodeBuddy (prefix: `cb/`)
 
-hexos auth connect <provider>           Connect provider via OAuth (manual browser)
-  --label <label>                       Account label (default: "Account 1")
-hexos auth auto-connect                 Connect via browser automation (Camoufox)
-  --email <email>                       Google email address (required)
-  --password <password>                 Google password (required)
-  --label <label>                       Account label (defaults to email)
-hexos auth batch-connect                Batch connect multiple accounts from file
-  --file <path>                         Path to accounts file (required)
-  --concurrency <n>                     Max concurrent logins (default: 2)
-hexos auth setup-automation             Setup Python env for browser automation
-hexos auth list                         List all connections with usage stats
-hexos auth remove <id>                  Remove a connection
+| Model ID | Context |
+|----------|---------|
+| `cb/claude-opus-4.6` | 1M |
+| `cb/claude-haiku-4.5` | 200K |
+| `cb/gpt-5.4` | 1M |
+| `cb/gpt-5.2` | 200K |
+| `cb/gpt-5.1` / `cb/gpt-5.1-codex` | 1M |
+| `cb/gpt-5.1-codex-mini` | 200K |
+| `cb/gemini-2.5-pro` / `cb/gemini-2.5-flash` | 1M |
+| `cb/gemini-3.1-pro` / `cb/gemini-3.0-flash` | 1M |
+| `cb/kimi-k2.5` | 131K |
+| `cb/glm-5.0` | 128K |
 
-hexos key create                        Generate new API key
-hexos key list                          List all API keys
-```
+### Cline (prefix: `cl/`)
+
+| Model ID | Context |
+|----------|---------|
+| `cl/claude-opus-4.7` / `cl/claude-opus-4.6` | 1M |
+| `cl/claude-sonnet-4.6` | 1M |
+| `cl/claude-haiku-4.5` | 200K |
+| `cl/grok-4` | 256K |
+| `cl/gemini-2.5-pro` / `cl/gemini-2.5-flash` | 1M |
+| `cl/deepseek-v3.2` / `cl/deepseek-r1` | 128K |
+| `cl/kimi-k2.6` | 131K |
+| `cl/gemma-4-26b:free` / `cl/minimax-m2.5:free` / `cl/gpt-oss-120b:free` | Free tier |
+
+### Kiro (prefix: `kr/`)
+
+| Model ID | Context |
+|----------|---------|
+| `kr/claude-sonnet-4.5` / `kr/claude-sonnet-4` | 200K |
+| `kr/claude-haiku-4.5` | 200K |
+| `kr/deepseek-3.2` | 128K |
+| `kr/qwen3-coder-next` | 131K |
+| `kr/glm-5` | 128K |
+| `kr/minimax-m2.1` | 1M |
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/v1/chat/completions` | Chat completions (OpenAI-compatible, SSE stream) |
-| `GET` | `/v1/models` | List available models |
+| `POST` | `/v1/messages` | Messages API (Anthropic-compatible) |
+| `GET` | `/v1/models` | List models with context lengths |
 | `GET` | `/health` | Health check |
 
-## Available Models (19)
-
-| Model ID | Name | Provider |
-|----------|------|----------|
-| `cb/default-model` | CodeBuddy Default | Tencent |
-| `cb/claude-opus-4.6` | Claude Opus 4.6 | Anthropic via CodeBuddy |
-| `cb/claude-haiku-4.5` | Claude Haiku 4.5 | Anthropic via CodeBuddy |
-| `cb/gpt-5.4` | GPT-5.4 | OpenAI via CodeBuddy |
-| `cb/gpt-5.2` | GPT-5.2 | OpenAI via CodeBuddy |
-| `cb/gpt-5.1` | GPT-5.1 | OpenAI via CodeBuddy |
-| `cb/gpt-5.1-codex` | GPT-5.1 Codex | OpenAI via CodeBuddy |
-| `cb/gpt-5.1-codex-mini` | GPT-5.1 Codex Mini | OpenAI via CodeBuddy |
-| `cb/gemini-3.1-pro` | Gemini 3.1 Pro | Google via CodeBuddy |
-| `cb/gemini-3.0-flash` | Gemini 3.0 Flash | Google via CodeBuddy |
-| `cb/gemini-2.5-pro` | Gemini 2.5 Pro | Google via CodeBuddy |
-| `cb/gemini-2.5-flash` | Gemini 2.5 Flash | Google via CodeBuddy |
-| `cb/kimi-k2.5` | Kimi K2.5 | Moonshot via CodeBuddy |
-| `cb/glm-5.0` | GLM 5.0 | Zhipu via CodeBuddy |
-
-## Usage Examples
-
-### PowerShell
-
-```powershell
-curl.exe -X POST http://localhost:8080/v1/chat/completions `
-  -H "Content-Type: application/json" `
-  -d "{""model"":""cb/claude-opus-4.6"",""messages"":[{""role"":""user"",""content"":""Hello""}]}"
-```
-
-### Bash / Linux
+## Dashboard
 
 ```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"cb/claude-opus-4.6","messages":[{"role":"user","content":"Hello"}]}'
+cd dashboard && bun install && bun dev
+# Open http://localhost:3000
 ```
 
-### With API Key
+### Pages
 
-```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer hx-your-key-here" \
-  -d '{"model":"cb/gpt-5.4","messages":[{"role":"user","content":"Hello"}]}'
-```
+- **Dashboard**: Credit summary (3 providers), usage charts, model/account breakdown
+- **Accounts**: Paginated table with search/filter, batch add, filter unconnected, batch logs
+- **Models**: Full model catalog with context windows
+- **Logs**: Request logs with filtering
+- **Integration**: Auto-bind to AI coding tools (Claude Code, OpenCode, Open Claw, Cline, Hermes)
 
-## Connect to AI Tools
+### Account Management
 
-Use Hexos as a backend for any OpenAI-compatible tool:
+- **Pagination**: Server-side with search, provider filter, status filter
+- **Credit Check**: Manual bulk check or per-account after each proxy request
+- **Batch Add**: Paste `email|password` list, select providers (CB/CL/KR), set concurrency
+- **Filter Unconnected**: Paste account list, find which aren't connected to a provider
+- **Batch Logs**: Live log panel shared between batch operations
 
-| Setting | Value |
-|---------|-------|
-| Endpoint | `http://localhost:8080/v1` |
-| API Key | Run `hexos key create` |
-| Model | `cb/claude-opus-4.6` (or any from list above) |
+## Tool Integration
 
-Works with: **Hermes Agent**, **OpenCode**, **Cline**, **Continue**, **Cursor** (custom endpoint), and any tool that supports custom OpenAI endpoints.
+Hexos auto-binds to AI coding tools via the Integration page:
 
-## Multi-Account & Browser Automation
+| Tool | Config File | Format |
+|------|-------------|--------|
+| Claude Code | `~/.claude/settings.json` | JSON (env vars) |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON (provider block) |
+| Open Claw | `~/.openclaw/openclaw.json` | JSON5 (models.providers) |
+| Cline | `~/.cline/endpoints.json` | JSON (apiBaseUrl) |
+| Hermes | `~/.hermes/config.yaml` | YAML (custom_providers) |
 
-Hexos supports managing 20+ CodeBuddy accounts with automatic load balancing. Accounts are added via browser automation using [Camoufox](https://github.com/nichochar/camoufox) (anti-detect Firefox browser).
-
-### Prerequisites
-
-- **Python 3.10+** installed on your system
-- **Google accounts** with email/password login (used to sign in to CodeBuddy)
-
-### Step 1: Setup Automation Environment
-
-Run this once to create a Python virtual environment and install Camoufox + Playwright:
-
-```bash
-hexos auth setup-automation
-```
-
-This will:
-- Find Python 3.10+ on your system
-- Create a venv at `src/automation/.venv/`
-- Install `camoufox`, `playwright`, `aiohttp`
-- Download the Firefox browser binary
-
-### Step 2: Add Accounts
-
-**Single account:**
-
-```bash
-hexos auth auto-connect --email user@gmail.com --password "mypassword"
-```
-
-**Batch from file:**
-
-Create a file `accounts.txt` with one account per line (format: `email|password` or `email|password|label`):
+## Multi-Account & Load Balancing
 
 ```
-user1@gmail.com|password123
-user2@gmail.com|secretpass
-user3@gmail.com|p@ssw0rd|My Custom Label
+Client Request → Pick least-used account → Forward to upstream
+  ↓ (401)        → Refresh token → Retry
+  ↓ (still fails) → Next least-used account (tries ALL before giving up)
+  ↓ (429 credit)  → Mark disabled → Next account
+  ↓ (success)     → Increment usage → Check credit (async, non-blocking)
 ```
 
-Lines starting with `#` are ignored (comments).
+### Worker Pool Concurrency
 
-Then run:
-
-```bash
-hexos auth batch-connect --file accounts.txt --concurrency 2
-```
-
-The `--concurrency` flag controls how many browsers run simultaneously (default: 2). For 20+ accounts, keep this at 2-3 to avoid Google rate limiting.
-
-### Step 3: Verify Accounts
-
-```bash
-hexos auth list
-```
-
-Output shows each account with status, usage count, and last used time:
+Batch connect uses a worker pool — each worker grabs the next account as soon as it finishes. No waiting for slow/stuck accounts.
 
 ```
-Connections (3):
-  a1b2c3d4 codebuddy — user1@gmail.com  [active]  used: 0  last: never
-  e5f6g7h8 codebuddy — user2@gmail.com  [active]  used: 0  last: never
-  i9j0k1l2 codebuddy — My Custom Label  [active]  used: 0  last: never
+Worker 1: account1 → done → account3 → done → account5 → ...
+Worker 2: account2 → stuck 90s → account4 → ...
 ```
 
-### Step 4: Start Proxy
+### Credit Monitoring
 
-```bash
-hexos start
-```
+- **CodeBuddy**: `get-dosage-notify` API (Bearer token) — detects exhausted (code 14001/14018) vs active (code 0). Default display: 250/250 credits.
+- **Cline**: `/api/v1/users/{uid}/balance` (Bearer token) — exact balance.
+- **Kiro**: `getUsageLimits` API — usage limits with remaining count.
+- Credits updated per-account after each successful proxy request (non-blocking).
+- No auto-polling — manual "Check Credits" button available.
 
-Hexos automatically uses **least-used load balancing**: each request goes to the account with the lowest usage count. If an account fails (401/429/5xx), it automatically fails over to the next least-used account.
-
-### How Load Balancing Works
-
-```
-Client Request
-    ↓
-Pick account with lowest usage count
-    ↓
-Forward request → Success? → Increment counter → Return response
-    ↓ (failure: 401/429/5xx)
-Try token refresh (if 401)
-    ↓ (still fails)
-Pick next least-used account (max 3 failover attempts)
-    ↓ (all exhausted)
-Return 502 error
-```
-
-**Account statuses:**
-- `active` — Working normally
-- `expired` — Token expired and refresh failed (will be skipped)
-- `disabled` — 3+ consecutive failures (will be skipped)
-
-Re-running `auto-connect` or `batch-connect` for an existing account resets it to `active`.
-
-### Environment Variables
+## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HEXOS_HEADLESS` | `true` | Run browser without GUI (`false` to see the browser) |
-| `HEXOS_DEBUG` | `false` | Enable verbose debug logging from automation |
-| `HEXOS_PROXY_URL` | — | Proxy for browser (e.g. `socks5://host:port`) |
+| `HEXOS_HEADLESS` | `true` | Run browser without GUI |
+| `HEXOS_DEBUG` | `false` | Verbose debug logging |
+| `HEXOS_PROXY_URL` | — | Proxy for browser (`socks5://host:port`) |
 
-### Troubleshooting
+## Data Storage
 
-**"Automation not set up"**
-→ Run `hexos auth setup-automation` first.
-
-**"Google blocked: captcha" or "unusual traffic"**
-→ Google detected bot activity. Try:
-- Set `HEXOS_HEADLESS=false` to watch the browser and solve captcha manually
-- Use a proxy: `HEXOS_PROXY_URL=socks5://host:port`
-- Reduce concurrency: `--concurrency 1`
-- Wait a few hours before retrying
-
-**"Token refresh failed" / account shows `[expired]`**
-→ Re-add the account: `hexos auth auto-connect --email ... --password ...`
-
-**"All connections failed"**
-→ All accounts are disabled/expired. Check `hexos auth list` and re-add working accounts.
-
-**Browser automation is slow**
-→ Each login takes ~15-30 seconds. For 20 accounts at concurrency 2, expect ~5-10 minutes total.
-
-## Notes
-
-- CodeBuddy API only supports `stream: true` — Hexos forces this automatically
-- System message is auto-injected if missing
-- Token auto-refreshes on 401, with automatic failover to next account
-- No API key required by default (open mode)
-- Data stored at `~/.hexos/db.json`
-- Python venv stored at `src/automation/.venv/` (gitignored)
+- Connections & API keys: `~/.hexos/db.json` (lowdb)
+- Usage records: `~/.hexos/usage.json`
+- Python venv: `src/automation/.venv/` (gitignored)
 
 ## License
 

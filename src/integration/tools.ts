@@ -1,6 +1,7 @@
 import { homedir } from "os";
 import { join } from "path";
 import { exec } from "child_process";
+import yaml from "js-yaml";
 import { log } from "../utils/logger.ts";
 import { MODEL_CATALOG } from "../config/models.ts";
 
@@ -118,18 +119,6 @@ function getToolDefs(apiKey: string): ToolDef[] {
       ],
     },
     {
-      id: "openclaw",
-      name: "Open Claw",
-      description: "Open-source Claude Code alternative",
-      icon: "cat",
-      configType: "custom",
-      configPath: "~/.openclaw/openclaw.json",
-      cliName: "openclaw",
-      modelSlots: [
-        { key: "model", label: "Primary Model", default: "cb/claude-opus-4.6" },
-      ],
-    },
-    {
       id: "cline",
       name: "Cline",
       description: "AI coding assistant by Cline Bot Inc.",
@@ -144,20 +133,14 @@ function getToolDefs(apiKey: string): ToolDef[] {
     {
       id: "hermes",
       name: "Hermes",
-      description: "AI coding agent - configure via environment variables",
+      description: "Nous Research AI coding agent",
       icon: "zap",
-      configType: "guide",
-      configPath: "",
+      configType: "custom",
+      configPath: "~/.hermes/config.yaml",
       cliName: "hermes",
-      envVars: {
-        OPENAI_API_KEY: apiKey,
-        OPENAI_BASE_URL: `${PROXY_BASE}/v1`,
-      },
-      guideSteps: [
-        "Set the following environment variables before running Hermes:",
-        `  export OPENAI_API_KEY="${apiKey}"`,
-        `  export OPENAI_BASE_URL="${PROXY_BASE}/v1"`,
-        "Then start Hermes as usual.",
+      showModelCheckboxes: true,
+      modelSlots: [
+        { key: "model", label: "Default Model", default: "cb/claude-opus-4.6" },
       ],
     },
 
@@ -193,6 +176,37 @@ async function writeJson(path: string, data: any): Promise<void> {
   await Bun.write(join(dir, ".keep"), "").catch(() => {});
   // mkdir via writing a temp file ensures the dir exists (Bun.write creates dirs)
   await Bun.write(path, JSON.stringify(data, null, 2));
+}
+
+/** Read a YAML file, return parsed object or null. */
+async function readYaml(path: string): Promise<any | null> {
+  try {
+    const file = Bun.file(path);
+    if (!(await file.exists())) return null;
+    const text = await file.text();
+    return yaml.load(text) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Write a YAML file, creating parent directories as needed. */
+async function writeYaml(path: string, data: any): Promise<void> {
+  const dir = path.replace(/[\\/][^\\/]+$/, "");
+  await Bun.write(join(dir, ".keep"), "").catch(() => {});
+  await Bun.write(path, yaml.dump(data, { lineWidth: -1, noRefs: true }));
+}
+
+/** Read a config file (JSON or YAML based on extension). */
+async function readConfig(path: string): Promise<any | null> {
+  if (path.endsWith(".yaml") || path.endsWith(".yml")) return readYaml(path);
+  return readJson(path);
+}
+
+/** Write a config file (JSON or YAML based on extension). */
+async function writeConfig(path: string, data: any): Promise<void> {
+  if (path.endsWith(".yaml") || path.endsWith(".yml")) return writeYaml(path, data);
+  return writeJson(path, data);
 }
 
 /** Deep merge source into target. Arrays are replaced, not concatenated. */
@@ -380,25 +394,29 @@ const handlers: Record<string, ToolHandler> = {
       } else {
         modelsList = buildAllModelsList();
       }
-      // Add provider tag
-      const taggedList = modelsList.map((m) => ({
-        id: m.id,
-        name: `${m.name} ${m.id.startsWith("cl/") ? "(Cline)" : "(CodeBuddy)"}`,
-      }));
+
+      // Build agents.defaults.models with hexos/prefix and provider tag alias
+      const modelsMap: Record<string, { alias: string }> = {};
+      for (const m of modelsList) {
+        const tag = m.id.startsWith("cl/") ? "CL" : m.id.startsWith("kr/") ? "KR" : "CB";
+        modelsMap[`hexos/${m.id}`] = { alias: `${m.name} (${tag})` };
+      }
+
+      const defaultModel = modelMap?.model || "cb/claude-opus-4.6";
+
       return {
         models: {
           providers: {
             hexos: {
               baseUrl: `${baseUrl}/v1`,
               apiKey,
-              api: "openai-completions",
-              models: taggedList,
             },
           },
         },
         agents: {
           defaults: {
-            model: { primary: "hexos/cb/claude-opus-4.6" },
+            models: modelsMap,
+            model: { primary: `hexos/${defaultModel}` },
           },
         },
       };
@@ -410,7 +428,22 @@ const handlers: Record<string, ToolHandler> = {
       return deepMerge(existing ?? {}, fragment);
     },
     clean(existing) {
-      return deepRemove(existing, ["models", "providers", "hexos"]);
+      let cleaned = deepRemove(existing, ["models", "providers", "hexos"]);
+      // Remove hexos models from agents.defaults.models
+      const models = getNestedValue(cleaned, "agents.defaults.models");
+      if (models && typeof models === "object") {
+        const cleanedModels = { ...models };
+        for (const key of Object.keys(cleanedModels)) {
+          if (key.startsWith("hexos/")) delete cleanedModels[key];
+        }
+        cleaned = deepMerge(cleaned, { agents: { defaults: { models: cleanedModels } } });
+      }
+      // Reset primary model if it's hexos
+      const primary = getNestedValue(cleaned, "agents.defaults.model.primary");
+      if (typeof primary === "string" && primary.startsWith("hexos/")) {
+        cleaned = deepMerge(cleaned, { agents: { defaults: { model: { primary: "" } } } });
+      }
+      return cleaned;
     },
   },
 
@@ -434,6 +467,85 @@ const handlers: Record<string, ToolHandler> = {
       if (!existing) return {};
       const cleaned = { ...existing };
       delete cleaned.apiBaseUrl;
+      return cleaned;
+    },
+  },
+
+  // ---- Hermes ----
+  hermes: {
+    buildConfig(apiKey, baseUrl, modelMap) {
+      const defaultModel = modelMap?.model || "cb/claude-opus-4.6";
+
+      // Filter models by checkbox selection
+      const selectedStr = modelMap?.["_selectedModels"];
+      let modelsList: Array<{ id: string; name: string }>;
+      if (selectedStr) {
+        const selected = new Set(selectedStr.split(",").filter(Boolean));
+        modelsList = buildAllModelsList().filter((m) => selected.has(m.id));
+      } else {
+        modelsList = buildAllModelsList();
+      }
+
+      // Build per-model entries for custom_providers with actual context lengths
+      const modelsConfig: Record<string, { context_length: number }> = {};
+      for (const m of modelsList) {
+        const catalogEntry = MODEL_CATALOG[m.id];
+        modelsConfig[m.id] = { context_length: catalogEntry?.info.contextWindow ?? 200000 };
+      }
+
+      return {
+        model: {
+          provider: "custom",
+          default: defaultModel,
+          base_url: `${baseUrl}/v1`,
+          api_key: apiKey,
+        },
+        custom_providers: [
+          {
+            name: "hexos",
+            base_url: `${baseUrl}/v1`,
+            key_env: "",
+            api_key: apiKey,
+            models: modelsConfig,
+          },
+        ],
+      };
+    },
+    isBound(config) {
+      // Check both model.base_url and custom_providers
+      const url = config?.model?.base_url;
+      if (typeof url === "string" && (url.includes("127.0.0.1") || url.includes("localhost"))) return true;
+      const providers = config?.custom_providers;
+      if (Array.isArray(providers)) {
+        return providers.some((p: any) => p.name === "hexos");
+      }
+      return false;
+    },
+    merge(existing, fragment) {
+      const merged = deepMerge(existing ?? {}, fragment);
+      // custom_providers is an array — replace, don't deep merge
+      if (fragment.custom_providers) {
+        // Remove existing hexos entry, then add new one
+        const existing_providers = Array.isArray(existing?.custom_providers) ? existing.custom_providers.filter((p: any) => p.name !== "hexos") : [];
+        merged.custom_providers = [...existing_providers, ...fragment.custom_providers];
+      }
+      return merged;
+    },
+    clean(existing) {
+      if (!existing) return {};
+      const cleaned = { ...existing };
+      // Clean model section
+      if (cleaned.model) {
+        cleaned.model = { ...cleaned.model };
+        delete cleaned.model.base_url;
+        delete cleaned.model.api_key;
+        if (cleaned.model.provider === "custom") delete cleaned.model.provider;
+      }
+      // Remove hexos from custom_providers
+      if (Array.isArray(cleaned.custom_providers)) {
+        cleaned.custom_providers = cleaned.custom_providers.filter((p: any) => p.name !== "hexos");
+        if (cleaned.custom_providers.length === 0) delete cleaned.custom_providers;
+      }
       return cleaned;
     },
   },
@@ -470,7 +582,7 @@ export async function detectTools(apiKey: string, baseUrl: string): Promise<Tool
     if (def.configType !== "guide" && absPath) {
       const handler = handlers[def.id];
       if (handler) {
-        const config = await readJson(absPath);
+        const config = await readConfig(absPath);
         if (config) {
           bound = handler.isBound(config);
         }
@@ -521,10 +633,10 @@ export async function bindTool(
   const absPath = resolveHome(def.configPath);
 
   try {
-    const existing = await readJson(absPath);
+    const existing = await readConfig(absPath);
     const fragment = handler.buildConfig(apiKey, baseUrl, modelMap);
     const merged = handler.merge(existing, fragment);
-    await writeJson(absPath, merged);
+    await writeConfig(absPath, merged);
     log.ok(`Bound ${def.name} — config written to ${absPath}`);
     return { success: true };
   } catch (err: any) {
@@ -554,7 +666,7 @@ export async function unbindTool(toolId: string): Promise<{ success: boolean; er
   const absPath = resolveHome(def.configPath);
 
   try {
-    const existing = await readJson(absPath);
+    const existing = await readConfig(absPath);
     if (!existing) {
       // Config file doesn't exist — nothing to unbind
       return { success: true };
@@ -569,7 +681,7 @@ export async function unbindTool(toolId: string): Promise<{ success: boolean; er
         unlinkSync(absPath);
       } catch {}
     } else {
-      await writeJson(absPath, cleaned);
+      await writeConfig(absPath, cleaned);
     }
 
     log.ok(`Unbound ${def.name} — hexos config removed from ${absPath}`);
@@ -630,7 +742,7 @@ export async function readToolConfig(
   const absPath = resolveHome(def.configPath);
 
   try {
-    const config = await readJson(absPath);
+    const config = await readConfig(absPath);
     if (config === null) {
       return { exists: false };
     }

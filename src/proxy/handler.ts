@@ -19,6 +19,48 @@ import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
 // Previously capped at 3, but with 100+ accounts we want full rotation.
 const MAX_FAILOVER_ATTEMPTS = Infinity;
 
+/**
+ * Check credit for a single connection after a successful request.
+ * Runs async (fire-and-forget) so it doesn't block the response.
+ */
+async function refreshCreditAfterUse(conn: Connection): Promise<void> {
+  try {
+    if (conn.provider === "codebuddy") {
+      const { checkServiceCredit } = await import("../auth/oauth.ts");
+      const credit = await checkServiceCredit(conn.accessToken, conn.uid, (conn as any).webCookie);
+      if (credit) {
+        await updateConnection(conn.id, { credit: { ...credit, fetchedAt: Date.now() } } as any);
+        if (credit.remainingCredits === 0) {
+          log.warn(`[${conn.label}] Credit exhausted after use — marking disabled`);
+          await setConnectionStatus(conn.id, "disabled");
+        }
+      }
+    } else if (conn.provider === "cline") {
+      const uid = conn.uid;
+      if (uid) {
+        const balRes = await fetch(`https://api.cline.bot/api/v1/users/${uid}/balance`, {
+          headers: { "Authorization": `Bearer workos:${conn.accessToken}`, "User-Agent": "Cline/3.79.0" },
+        });
+        const balData = await balRes.json() as any;
+        if (balData?.success && balData?.data) {
+          const balance = balData.data.balance ?? 0;
+          await updateConnection(conn.id, {
+            credit: { totalCredits: balance, remainingCredits: balance, usedCredits: 0, packageName: "Cline", expiresAt: "", fetchedAt: Date.now() },
+          } as any);
+        }
+      }
+    } else if (conn.provider === "kiro") {
+      const { checkKiroToken } = await import("../auth/oauth.ts");
+      const status = await checkKiroToken(conn.accessToken, conn.uid);
+      if (status.valid && status.usage) {
+        await updateConnection(conn.id, { credit: { ...status.usage, fetchedAt: Date.now() } } as any);
+      }
+    }
+  } catch {
+    // Silent — don't let credit check errors affect the proxy
+  }
+}
+
 export interface ProxyMeta {
   model: string;
   accountId: string;
@@ -122,6 +164,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
 
             if (retryRes.ok || (retryRes.status >= 200 && retryRes.status < 400)) {
               await incrementUsage(conn.id);
+              refreshCreditAfterUse(conn).catch(() => {});
               // Kiro: convert EventStream → OpenAI SSE
               if (isKiro) {
                 return await handleKiroResponse(retryRes, resolvedModel, conn, startTime, stream);
@@ -200,6 +243,8 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
 
       // Success (2xx) or benign client error (400, 404, 422)
       await incrementUsage(conn.id);
+      // Refresh credit for this account in background (non-blocking)
+      refreshCreditAfterUse(conn).catch(() => {});
 
       // Kiro: convert EventStream binary → OpenAI SSE/JSON
       if (isKiro && res.ok) {

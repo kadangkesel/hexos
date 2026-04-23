@@ -41,17 +41,37 @@ export interface BatchTask {
   [key: string]: unknown;
 }
 
+export interface PaginationInfo {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface FetchParams {
+  page?: number;
+  limit?: number;
+  search?: string;
+  provider?: string;
+  status?: string;
+}
+
 export interface ConnectionsState {
   connections: Connection[];
+  pagination: PaginationInfo;
   loading: boolean;
   error: string | null;
+
+  // Current filter/pagination params
+  fetchParams: FetchParams;
 
   batchTaskId: string | null;
   batchTask: BatchTask | null;
   batchLoading: boolean;
   batchError: string | null;
 
-  fetch: () => Promise<void>;
+  fetch: (params?: FetchParams) => Promise<void>;
+  setFetchParams: (params: FetchParams) => void;
   remove: (id: string) => Promise<void>;
   enable: (id: string) => Promise<void>;
   disable: (id: string) => Promise<void>;
@@ -73,19 +93,40 @@ export interface ConnectionsState {
 
 export const useConnectionsStore = create<ConnectionsState>()((set, get) => ({
   connections: [],
+  pagination: { page: 1, limit: 20, total: 0, totalPages: 1 },
   loading: false,
   error: null,
+
+  fetchParams: { page: 1, limit: 20 },
 
   batchTaskId: null,
   batchTask: null,
   batchLoading: false,
   batchError: null,
 
-  fetch: async () => {
+  setFetchParams: (params) => {
+    const merged = { ...get().fetchParams, ...params };
+    set({ fetchParams: merged });
+  },
+
+  fetch: async (params) => {
+    const merged = params ? { ...get().fetchParams, ...params } : get().fetchParams;
+    // Persist params so subsequent fetch() calls (e.g. after enable/disable) use the same filters
+    if (params) set({ fetchParams: merged });
+
     set({ loading: true, error: null });
     try {
-      const connections = await apiFetch<Connection[]>("/api/connections");
-      set({ connections, loading: false });
+      const qs = new URLSearchParams();
+      if (merged.page) qs.set("page", String(merged.page));
+      if (merged.limit) qs.set("limit", String(merged.limit));
+      if (merged.search) qs.set("search", merged.search);
+      if (merged.provider) qs.set("provider", merged.provider);
+      if (merged.status) qs.set("status", merged.status);
+
+      const result = await apiFetch<{ data: Connection[]; pagination: PaginationInfo }>(
+        `/api/connections?${qs.toString()}`,
+      );
+      set({ connections: result.data, pagination: result.pagination, loading: false });
     } catch (err) {
       set({
         error:
@@ -98,9 +139,13 @@ export const useConnectionsStore = create<ConnectionsState>()((set, get) => ({
   remove: async (id) => {
     try {
       await apiFetch(`/api/connections/${id}`, { method: "DELETE" });
-      set((s) => ({
-        connections: s.connections.filter((c) => c.id !== id),
-      }));
+      // Re-fetch to update pagination counts; go back a page if current page is now empty
+      const { pagination, connections, fetchParams } = get();
+      if (connections.length <= 1 && pagination.page > 1) {
+        await get().fetch({ ...fetchParams, page: pagination.page - 1 });
+      } else {
+        await get().fetch();
+      }
     } catch (err) {
       set({
         error:

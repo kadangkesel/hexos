@@ -75,6 +75,7 @@ export function createApp() {
       object: "model",
       created: 0,
       owned_by: "hexos",
+      context_length: m.contextWindow ?? 200000,
     }));
     return c.json({ object: "list", data: models });
   });
@@ -295,7 +296,13 @@ export function createApp() {
 
   // --- Connections / Accounts ---
   app.get("/api/connections", (c) => {
-    const conns = listConnections().map((conn) => ({
+    const page = Math.max(1, Number(c.req.query("page")) || 1);
+    const limit = Math.min(100, Math.max(1, Number(c.req.query("limit")) || 20));
+    const search = (c.req.query("search") || "").toLowerCase().trim();
+    const providerFilter = c.req.query("provider") || "";
+    const statusFilter = c.req.query("status") || "";
+
+    let conns = listConnections().map((conn) => ({
       id: conn.id,
       provider: conn.provider,
       label: conn.label,
@@ -307,7 +314,73 @@ export function createApp() {
       createdAt: conn.createdAt,
       // Never expose tokens to dashboard
     }));
-    return c.json(conns);
+
+    // Apply filters
+    if (search) {
+      conns = conns.filter((c) => (c.label || "").toLowerCase().includes(search));
+    }
+    if (providerFilter) {
+      conns = conns.filter((c) => c.provider === providerFilter);
+    }
+    if (statusFilter) {
+      conns = conns.filter((c) => c.status === statusFilter);
+    }
+
+    const total = conns.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * limit;
+    const data = conns.slice(offset, offset + limit);
+
+    return c.json({
+      data,
+      pagination: {
+        page: safePage,
+        limit,
+        total,
+        totalPages,
+      },
+    });
+  });
+
+  // Lightweight endpoint: returns all {provider, label} pairs (no tokens, no pagination)
+  // Used by FilterUnconnected to check which accounts are already connected
+  app.get("/api/connections/labels", (c) => {
+    const labels = listConnections().map((conn) => ({
+      provider: conn.provider,
+      label: conn.label,
+    }));
+    return c.json(labels);
+  });
+
+  // Credit summary: aggregate stats across ALL connections (not paginated)
+  app.get("/api/connections/credit-summary", (c) => {
+    const conns = listConnections();
+    const byProvider: Record<string, { total: number; used: number; remaining: number; count: number; active: number; exhausted: number }> = {};
+
+    for (const conn of conns) {
+      const p = conn.provider || "codebuddy";
+      if (!byProvider[p]) byProvider[p] = { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0 };
+      byProvider[p].count++;
+      if (conn.status === "active") byProvider[p].active++;
+
+      const credit = conn.credit as { totalCredits?: number; usedCredits?: number; remainingCredits?: number } | undefined;
+      if (credit) {
+        const tot = Number(credit.totalCredits ?? 0);
+        const used = Number(credit.usedCredits ?? 0);
+        const rem = Number(credit.remainingCredits ?? 0);
+        byProvider[p].total += tot;
+        byProvider[p].used += used;
+        byProvider[p].remaining += rem;
+        if (rem === 0 && tot > 0) byProvider[p].exhausted++;
+      }
+    }
+
+    return c.json({
+      totalConnections: conns.length,
+      activeConnections: conns.filter((c) => c.status === "active").length,
+      byProvider,
+    });
   });
 
   app.delete("/api/connections/:id", async (c) => {
@@ -419,15 +492,33 @@ export function createApp() {
     // CodeBuddy
     const status = await checkToken(conn.accessToken);
     
-    // Token invalid → mark expired
+    // Token invalid - mark expired
     if (!status.valid) {
-      log.warn(`[Check] ${conn.label} (CodeBuddy) token invalid — marking expired`);
+      log.warn(`[Check] ${conn.label} (CodeBuddy) token invalid - marking expired`);
       await setConnectionStatus(conn.id, "expired");
       return c.json({ valid: false, expired: true, reason: "token_invalid" });
     }
     
-    // Token valid — ensure status is active
+    // Token valid - ensure status is active
     if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+    
+    // Save UID if returned by checkToken and not already stored
+    const uid = status.uid || conn.uid || "";
+    if (status.uid && !conn.uid) {
+      await updateConnection(conn.id, { uid: status.uid });
+    }
+    
+    // Fetch fresh credit (tries Bearer token first, falls back to cookie)
+    {
+      const { checkServiceCredit } = await import("./auth/oauth.ts");
+      const credit = await checkServiceCredit(conn.accessToken, uid, conn.webCookie);
+      if (credit) {
+        await updateConnection(conn.id, {
+          credit: { ...credit, fetchedAt: Date.now() },
+        });
+        return c.json({ valid: true, ...status, credit });
+      }
+    }
     
     return c.json(status);
   });
@@ -455,9 +546,12 @@ export function createApp() {
     batchConnectTasks.set(taskId, { status: "running", total: accounts.length, completed: 0, success: 0, failed: 0, errors: [], logs: [] });
 
     // Capture logs via listener (non-invasive, no global hook)
+    // Filter out credit-check noise — those run on a background timer and clutter batch logs
+    const BATCH_LOG_IGNORE = ["[CreditCheck]", "[Check credits]", "[Check]"];
     const logListener = (level: BatchTaskLog["level"], msg: string) => {
       const task = batchConnectTasks.get(taskId);
       if (task && task.status === "running") {
+        if (BATCH_LOG_IGNORE.some((prefix) => msg.includes(prefix))) return;
         const time = new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
         task.logs.push({ time, level, message: msg });
         if (task.logs.length > 500) task.logs.splice(0, task.logs.length - 500);
@@ -606,14 +700,30 @@ export function createApp() {
           status = await checkToken(conn.accessToken);
           
           if (!status.valid) {
-            // Token invalid → mark expired
+            // Token invalid - mark expired
             if (conn.status !== "expired") {
               await setConnectionStatus(conn.id, "expired");
               expiredCount++;
-              log.warn(`[Check credits] ${conn.label} (CodeBuddy) token invalid — marked expired`);
+              log.warn(`[Check credits] ${conn.label} (CodeBuddy) token invalid - marked expired`);
             }
             results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
             return;
+          }
+          
+          // Save UID if returned and not stored
+          if (status.uid && !conn.uid) {
+            const { updateConnection } = await import("./auth/store.ts");
+            await updateConnection(conn.id, { uid: status.uid });
+          }
+          
+          // Fetch fresh credit
+          {
+            const resolvedUid = status.uid || conn.uid || "";
+            const { checkServiceCredit } = await import("./auth/oauth.ts");
+            const credit = await checkServiceCredit(conn.accessToken, resolvedUid, conn.webCookie);
+            if (credit) {
+              status = { ...status, credit };
+            }
           }
         }
         

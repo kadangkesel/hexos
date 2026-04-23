@@ -20,7 +20,11 @@ import {
   BarChart3,
   Layers,
   Contact,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardHeader,
@@ -129,6 +133,116 @@ const STAT_DEFS: StatDef[] = [
 /*  Chart Range Options                                                */
 /* ------------------------------------------------------------------ */
 
+const ACCOUNT_PREVIEW_LIMIT = 10;
+
+function UsageByAccountCard({ data, loading }: { data: Array<Record<string, unknown>>; loading: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? data : data.slice(0, ACCOUNT_PREVIEW_LIMIT);
+  const hasMore = data.length > ACCOUNT_PREVIEW_LIMIT;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.8 }}
+    >
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-500">
+              <Contact className="h-4 w-4" />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <CardTitle>Usage by Account</CardTitle>
+                <Badge variant="secondary" className="text-[10px]">{data.length}</Badge>
+              </div>
+              <p className="text-[10px] text-muted-foreground/70 mt-0.5">Activity breakdown per account</p>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className={cn("overflow-hidden", expanded && "overflow-auto max-h-[500px]")}>
+            <Table>
+              <TableHeader className={cn(expanded && "sticky top-0 z-10 bg-card")}>
+                <TableRow>
+                  <TableHead>Account</TableHead>
+                  <TableHead className="text-right">Requests</TableHead>
+                  <TableHead className="text-right">Tokens</TableHead>
+                  <TableHead className="text-right">Cost</TableHead>
+                  <TableHead className="text-right">Last Used</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading && data.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                      Loading...
+                    </TableCell>
+                  </TableRow>
+                ) : data.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                      No data
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  visible.map((a, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="max-w-[160px] truncate">
+                        {String(a.accountLabel ?? a.label ?? a.account ?? a.email ?? "\u2014")}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatNumber((a.requests as number) ?? 0)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatNumber((a.totalTokens as number) ?? (a.tokens as number) ?? 0)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatCost((a.creditCost as number) ?? 0)}
+                      </TableCell>
+                      <TableCell className="text-right text-xs text-muted-foreground">
+                        {(() => {
+                          const ts = Number(a.lastUsed ?? a.lastUsedAt ?? 0);
+                          if (!ts) return "\u2014";
+                          const d = new Date(ts);
+                          return isNaN(d.getTime()) ? "\u2014" : d.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+                        })()}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          {hasMore && (
+            <div className="flex justify-center pt-3 border-t border-border mt-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-muted-foreground"
+                onClick={() => setExpanded(!expanded)}
+              >
+                {expanded ? (
+                  <>
+                    <ChevronUp className="h-3.5 w-3.5" />
+                    Show top {ACCOUNT_PREVIEW_LIMIT}
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                    Show all {data.length} accounts
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
 const RANGES: { label: string; value: ChartRange }[] = [
   { label: "Day", value: "day" },
   { label: "Week", value: "week" },
@@ -142,9 +256,10 @@ const RANGES: { label: string; value: ChartRange }[] = [
 export default function DashboardPage() {
   const { stats, loading: dashLoading, fetch: fetchDash } = useDashboardStore();
   const { chart, chartLoading, fetchChart } = useUsageStore();
-  const { connections, fetch: fetchConnections } = useConnectionsStore();
+  const { fetch: fetchConnections } = useConnectionsStore();
 
   const [activeRange, setActiveRange] = useState<ChartRange>("day");
+  const [creditSummary, setCreditSummary] = useState<Record<string, any> | null>(null);
 
   /* ---- derived data from the rich API response ---- */
   const usage = ((stats as Record<string, unknown>)?.usage ?? {}) as Record<string, number>;
@@ -172,34 +287,40 @@ export default function DashboardPage() {
       ? Object.entries(byAccountRaw).map(([key, val]) => ({ accountId: key, ...val }))
       : [];
 
-  /* ---- credit stats from connections ---- */
-  const activeConns = connections.filter((c) => String(c.status ?? "") === "active");
-  const exhaustedConns = connections.filter((c) => {
-    const credit = c.credit as Record<string, unknown> | undefined;
-    const remaining = Number(credit?.remainingCredits ?? -1);
-    return remaining === 0;
-  });
+  /* ---- credit stats from server-side summary (all connections, not paginated) ---- */
+  const bp = creditSummary?.byProvider ?? {};
+  const cb = bp.codebuddy ?? { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0 };
+  const cl = bp.cline ?? { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0 };
+  const kr = bp.kiro ?? { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0 };
 
-  // Split credits by provider
-  const cbConns = connections.filter((c) => String((c as any).provider ?? "codebuddy") === "codebuddy");
-  const clConns = connections.filter((c) => String((c as any).provider) === "cline");
-
-  const cbTotal = cbConns.reduce((s, c) => s + (Number((c.credit as any)?.totalCredits) || 0), 0);
-  const cbUsed = cbConns.reduce((s, c) => s + (Number((c.credit as any)?.usedCredits) || 0), 0);
-  const cbRemaining = cbTotal - cbUsed;
+  const cbTotal = cb.total;
+  const cbUsed = cb.used;
+  const cbRemaining = cb.remaining;
   const cbPercent = cbTotal > 0 ? (cbUsed / cbTotal) * 100 : 0;
 
-  const clTotal = clConns.reduce((s, c) => s + (Number((c.credit as any)?.totalCredits) || 0), 0);
-  const clUsed = clConns.reduce((s, c) => s + (Number((c.credit as any)?.usedCredits) || 0), 0);
-  const clRemaining = clTotal - clUsed;
+  const clTotal = cl.total;
+  const clUsed = cl.used;
+  const clRemaining = cl.remaining;
   const clPercent = clTotal > 0 ? (clUsed / clTotal) * 100 : 0;
 
+  const totalActive = creditSummary?.activeConnections ?? 0;
+  const totalExhausted = cb.exhausted + cl.exhausted + kr.exhausted;
+
   /* ---- fetch on mount + auto-refresh every 30s ---- */
+  const fetchCreditSummary = useCallback(async () => {
+    try {
+      const { apiFetch } = await import("@/lib/api");
+      const data = await apiFetch<Record<string, any>>("/api/connections/credit-summary");
+      setCreditSummary(data);
+    } catch {}
+  }, []);
+
   const refresh = useCallback(() => {
     fetchDash();
     fetchChart(activeRange);
     fetchConnections();
-  }, [fetchDash, fetchChart, fetchConnections, activeRange]);
+    fetchCreditSummary();
+  }, [fetchDash, fetchChart, fetchConnections, fetchCreditSummary, activeRange]);
 
   useEffect(() => {
     refresh();
@@ -303,9 +424,9 @@ export default function DashboardPage() {
                 </div>
                 {stat.title === "Total Accounts" ? (
                   <p className="text-[10px] text-muted-foreground/70 mt-1">
-                    <span className="text-emerald-500">{activeConns.length} active</span>
+                    <span className="text-emerald-500">{totalActive} active</span>
                     {" · "}
-                    <span className="text-destructive">{exhaustedConns.length} exhausted</span>
+                    <span className="text-destructive">{totalExhausted} exhausted</span>
                   </p>
                 ) : stat.desc ? (
                   <p className="text-[10px] text-muted-foreground/70 mt-1">{stat.desc}</p>
@@ -323,51 +444,38 @@ export default function DashboardPage() {
         transition={{ delay: 0.55 }}
         className="mb-6"
       >
-        {/* Credits by provider */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {/* CodeBuddy credits */}
-          {cbConns.length > 0 && (
-            <Card>
+        {/* Credits by provider — always show all 3 */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {[
+            { key: "cb", label: "CodeBuddy", data: cb, total: cbTotal, used: cbUsed, remaining: cbRemaining, percent: cbPercent, iconBg: "bg-amber-500/10 text-amber-500", barColor: "bg-primary" },
+            { key: "cl", label: "Cline", data: cl, total: clTotal, used: clUsed, remaining: clRemaining, percent: clPercent, iconBg: "bg-violet-500/10 text-violet-500", barColor: "bg-violet-500" },
+            { key: "kr", label: "Kiro", data: kr, total: kr.total, used: kr.used, remaining: kr.remaining, percent: kr.total > 0 ? (kr.used / kr.total) * 100 : 0, iconBg: "bg-sky-500/10 text-sky-500", barColor: "bg-sky-500" },
+          ].map((p) => (
+            <Card key={p.key}>
               <CardContent className="pt-3">
                 <div className="flex items-center gap-2 mb-2">
-                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-500">
+                  <div className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-md", p.iconBg)}>
                     <Coins className="h-3.5 w-3.5" />
                   </div>
-                  <p className="text-xs font-medium text-muted-foreground">CodeBuddy Credits</p>
+                  <p className="text-xs font-medium text-muted-foreground">{p.label} Credits</p>
+                  <span className="ml-auto text-[10px] text-muted-foreground">{p.data.count} accs</span>
                 </div>
                 <p className="text-lg font-bold">
-                  {cbUsed.toFixed(1)}{" "}
-                  <span className="text-muted-foreground font-normal text-sm">/ {cbTotal.toFixed(1)}</span>
+                  {p.remaining >= 1000 ? `${(p.remaining / 1000).toFixed(1)}K` : p.remaining.toFixed(1)}{" "}
+                  <span className="text-muted-foreground font-normal text-sm">/ {p.total >= 1000 ? `${(p.total / 1000).toFixed(1)}K` : p.total.toFixed(1)}</span>
                 </p>
                 <div className="w-full h-1.5 bg-muted rounded-full mt-1.5 overflow-hidden">
-                  <div className={cn("h-full rounded-full transition-all duration-500", cbPercent > 80 ? "bg-destructive" : "bg-primary")} style={{ width: `${Math.min(cbPercent, 100)}%` }} />
+                  <div className={cn("h-full rounded-full transition-all duration-500", p.percent > 80 ? "bg-destructive" : p.barColor)} style={{ width: `${Math.min(p.percent, 100)}%` }} />
                 </div>
-                <span className="text-[10px] text-muted-foreground">{cbRemaining.toFixed(1)} remaining</span>
+                <div className="flex items-center justify-between mt-0.5">
+                  <span className="text-[10px] text-muted-foreground">{p.remaining >= 1000 ? `${(p.remaining / 1000).toFixed(1)}K` : p.remaining.toFixed(1)} remaining</span>
+                  {p.data.exhausted > 0 && (
+                    <span className="text-[10px] text-destructive">{p.data.exhausted} exhausted</span>
+                  )}
+                </div>
               </CardContent>
             </Card>
-          )}
-
-          {/* Cline credits */}
-          {clConns.length > 0 && (
-            <Card>
-              <CardContent className="pt-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-violet-500/10 text-violet-500">
-                    <Coins className="h-3.5 w-3.5" />
-                  </div>
-                  <p className="text-xs font-medium text-muted-foreground">Cline Credits</p>
-                </div>
-                <p className="text-lg font-bold">
-                  {clRemaining >= 1000 ? `${(clRemaining / 1000).toFixed(1)}K` : clRemaining.toFixed(0)}{" "}
-                  <span className="text-muted-foreground font-normal text-sm">/ {clTotal >= 1000 ? `${(clTotal / 1000).toFixed(1)}K` : clTotal.toFixed(0)}</span>
-                </p>
-                <div className="w-full h-1.5 bg-muted rounded-full mt-1.5 overflow-hidden">
-                  <div className={cn("h-full rounded-full transition-all duration-500", clPercent > 80 ? "bg-destructive" : "bg-violet-500")} style={{ width: `${Math.min(clPercent, 100)}%` }} />
-                </div>
-                <span className="text-[10px] text-muted-foreground">{clRemaining >= 1000 ? `${(clRemaining / 1000).toFixed(1)}K` : clRemaining.toFixed(0)} remaining</span>
-              </CardContent>
-            </Card>
-          )}
+          ))}
         </div>
       </motion.div>
 
@@ -616,75 +724,10 @@ export default function DashboardPage() {
         </motion.div>
 
         {/* Usage by Account */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.8 }}
-        >
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-500">
-                  <Contact className="h-4 w-4" />
-                </div>
-                <div>
-                  <CardTitle>Usage by Account</CardTitle>
-                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">Activity breakdown per account</p>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Account</TableHead>
-                    <TableHead className="text-right">Requests</TableHead>
-                    <TableHead className="text-right">Tokens</TableHead>
-                    <TableHead className="text-right">Cost</TableHead>
-                    <TableHead className="text-right">Last Used</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {dashLoading && sortedByAccount.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                        Loading...
-                      </TableCell>
-                    </TableRow>
-                  ) : sortedByAccount.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                        No data
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    sortedByAccount.map((a, i) => (
-                      <TableRow key={i}>
-                        <TableCell className="max-w-[160px] truncate">
-                          {String(a.accountLabel ?? a.label ?? a.account ?? a.email ?? "\u2014")}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatNumber((a.requests as number) ?? 0)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatNumber((a.totalTokens as number) ?? (a.tokens as number) ?? 0)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatCost((a.creditCost as number) ?? 0)}
-                        </TableCell>
-                        <TableCell className="text-right text-xs text-muted-foreground">
-                          {(a.lastUsed || a.lastUsedAt)
-                            ? new Date(String(a.lastUsed ?? a.lastUsedAt)).toLocaleDateString()
-                            : "\u2014"}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </motion.div>
+        <UsageByAccountCard
+          data={sortedByAccount}
+          loading={dashLoading}
+        />
       </div>
     </>
   );

@@ -31,6 +31,8 @@ export interface Connection {
   failCount: number;
   // Credit info
   credit?: CreditInfo;
+  // Web cookie for Service billing API (cookie-based auth, not Bearer)
+  webCookie?: string;
 }
 
 interface DbSchema {

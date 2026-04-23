@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   title: "Hexos Dashboard",
   description: "Hexos AI Gateway Dashboard",
   icons: {
-    icon: "/icon.png",
+    icon: "/favicon.ico",
   },
 };
 

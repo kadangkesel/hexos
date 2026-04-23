@@ -162,6 +162,161 @@ export async function checkCredit(accessToken: string): Promise<CreditResult | n
   return null;
 }
 
+// Dosage notify codes that mean credit is exhausted
+const EXHAUSTED_CODES = new Set([14001, 14018]);
+
+/**
+ * Fetch Service credit status.
+ *
+ * Uses /v2/billing/meter/get-dosage-notify (Bearer token — works for all accounts).
+ * - dosageNotifyCode 0 = has credit
+ * - dosageNotifyCode 14001/14018 = exhausted
+ *
+ * If cookie is available, also tries /billing/meter/get-user-resource for exact amounts.
+ * (get-user-resource returns 401 with Bearer — cookie-only)
+ */
+export async function checkServiceCredit(
+  accessToken: string,
+  uid?: string,
+  webCookie?: string,
+): Promise<CreditResult | null> {
+  const baseUrl = "https://www.codebuddy.ai";
+
+  // Step 1: get-dosage-notify (always works with Bearer)
+  let exhausted = false;
+  let notifyChecked = false;
+  try {
+    const res = await fetch(`${baseUrl}/v2/billing/meter/get-dosage-notify`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-User-Id": uid || "",
+        "X-Product": "SaaS",
+        "X-IDE-Type": "CLI",
+        "User-Agent": "codebuddy/2.91.0",
+      },
+      body: "{}",
+    });
+
+    if (res.status === 200) {
+      const data = await res.json() as any;
+      if (data?.code === 0) {
+        notifyChecked = true;
+        const notifyCode = data?.data?.dosageNotifyCode ?? 0;
+        exhausted = EXHAUSTED_CODES.has(notifyCode);
+        log.info(`[CreditCheck] dosage-notify code=${notifyCode} exhausted=${exhausted}`);
+      }
+    }
+  } catch (e: any) {
+    log.warn(`[CreditCheck] dosage-notify error: ${e.message}`);
+  }
+
+  // Step 2: try get-user-resource for exact amounts (cookie-only, Bearer returns 401)
+  let detailCredit: CreditResult | null = null;
+  if (webCookie?.trim()) {
+    detailCredit = await _fetchUserResource(webCookie);
+  }
+
+  // Step 3: merge results
+  if (detailCredit) {
+    // If dosage-notify says exhausted but detail shows remaining > 0, trust dosage-notify
+    if (notifyChecked && exhausted && detailCredit.remainingCredits > 0) {
+      detailCredit.remainingCredits = 0;
+    }
+    return detailCredit;
+  }
+
+  // No detail available — return default 250 credit with status from dosage-notify
+  const DEFAULT_CREDIT = 250;
+  if (notifyChecked) {
+    return {
+      totalCredits: DEFAULT_CREDIT,
+      remainingCredits: exhausted ? 0 : DEFAULT_CREDIT,
+      usedCredits: exhausted ? DEFAULT_CREDIT : 0,
+      packageName: "Free",
+      expiresAt: "",
+    };
+  }
+
+  // Could not reach dosage-notify — return default as fallback
+  return {
+    totalCredits: DEFAULT_CREDIT,
+    remainingCredits: DEFAULT_CREDIT,
+    usedCredits: 0,
+    packageName: "Free",
+    expiresAt: "",
+  };
+}
+
+/**
+ * Internal: call /billing/meter/get-user-resource with cookie auth.
+ * Bearer token returns 401 on this endpoint — cookie is required.
+ */
+async function _fetchUserResource(webCookie: string): Promise<CreditResult | null> {
+  const baseUrl = "https://www.codebuddy.ai";
+  const now = new Date();
+  const begin = now.toISOString().replace("T", " ").slice(0, 19);
+  const end = new Date(now.getTime() + 365 * 100 * 24 * 60 * 60 * 1000).toISOString().replace("T", " ").slice(0, 19);
+
+  try {
+    const res = await fetch(`${baseUrl}/billing/meter/get-user-resource`, {
+      method: "POST",
+      headers: {
+        "Cookie": webCookie,
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Referer": `${baseUrl}/profile/usage`,
+        "Origin": baseUrl,
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Domain": "www.codebuddy.ai",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      },
+      body: JSON.stringify({
+        PageNumber: 1,
+        PageSize: 300,
+        ProductCode: "p_tcaca",
+        Status: [0, 3],
+        PackageEndTimeRangeBegin: begin,
+        PackageEndTimeRangeEnd: end,
+      }),
+    });
+
+    if (res.status !== 200) return null;
+
+    const payload = await res.json() as any;
+    if (payload?.code !== 0) return null;
+
+    const responseData = payload?.data?.Response?.Data ?? {};
+    const totalDosage = Number(responseData.TotalDosage ?? 0);
+    const accounts: any[] = responseData.Accounts ?? [];
+
+    let totalRemain = 0;
+    let totalUsed = 0;
+    let totalSize = 0;
+    let packageName = "";
+    let expiresAt = "";
+
+    for (const acct of accounts) {
+      totalRemain += Number(acct.CapacityRemain ?? 0);
+      totalUsed += Number(acct.CapacityUsed ?? 0);
+      totalSize += Number(acct.CapacitySize ?? 0);
+      if (!packageName) packageName = acct.PackageName ?? "";
+      if (!expiresAt) expiresAt = acct.CycleEndTime ?? "";
+    }
+
+    return {
+      totalCredits: Math.max(totalDosage, totalSize),
+      remainingCredits: Math.max(totalDosage, totalRemain),
+      usedCredits: totalUsed,
+      packageName,
+      expiresAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Automated OAuth: browser automation via Camoufox (Python subprocess)
 // ---------------------------------------------------------------------------
@@ -182,6 +337,7 @@ interface AutoLoginProgress {
     packageName: string;
     expiresAt: string;
   };
+  webCookie?: string;
 }
 
 /**
@@ -359,18 +515,22 @@ export async function oauthCodebuddyAutomated(
     uid: finalResult.uid || "",
   });
 
-  // Step 4: Save credit info if available
-  if (finalResult.credit) {
+  // Step 4: Save credit info + web cookie if available
+  {
     const { updateConnection } = await import("./store.ts");
-    await updateConnection(conn.id, {
-      credit: {
-        ...finalResult.credit,
-        fetchedAt: Date.now(),
-      },
-    } as any);
+    const patch: Record<string, unknown> = {};
+    if (finalResult.credit) {
+      patch.credit = { ...finalResult.credit, fetchedAt: Date.now() };
+    }
+    if (finalResult.webCookie) {
+      patch.webCookie = finalResult.webCookie;
+    }
+    if (Object.keys(patch).length > 0) {
+      await updateConnection(conn.id, patch as any);
+    }
   }
 
-  log.ok(`[${accountLabel}] CodeBuddy connected!`);
+  log.ok(`[${accountLabel}] Service connected!`);
   return { success: true };
 }
 

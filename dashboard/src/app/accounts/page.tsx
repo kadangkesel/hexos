@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { useConnectionsStore, type Connection } from "@/stores/connections";
+import { useConnectionsStore, type Connection, type FetchParams } from "@/stores/connections";
 import { PageHeader } from "@/components/PageHeader";
 import { motion } from "motion/react";
 import { toast } from "sonner";
@@ -15,6 +15,12 @@ import {
   Upload,
   Square,
   ListFilter,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Search,
+  Terminal,
 } from "lucide-react";
 import {
   Card,
@@ -34,9 +40,17 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogTrigger,
@@ -256,6 +270,7 @@ function BatchAddSection() {
   const [providers, setProviders] = useState<string[]>(["codebuddy"]);
   const taskId = batchTaskId;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const toastShownRef = useRef<string | null>(null);
 
   /* stop polling on unmount */
   useEffect(() => {
@@ -267,6 +282,7 @@ function BatchAddSection() {
   /* poll batch status */
   useEffect(() => {
     if (!taskId) return;
+    toastShownRef.current = null; // reset toast guard for new task
 
     fetchBatchStatus(taskId);
     pollRef.current = setInterval(() => fetchBatchStatus(taskId), 2000);
@@ -276,27 +292,32 @@ function BatchAddSection() {
     };
   }, [taskId, fetchBatchStatus]);
 
-  /* detect completion */
+  /* detect completion — show toast only once per task */
   useEffect(() => {
-    if (
-      batchTask &&
-      (batchTask.status === "completed" || batchTask.status === "done" || batchTask.status === "cancelled" || batchTask.status === "failed")
-    ) {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      if (batchTask.status === "cancelled") {
-        toast("Batch cancelled");
-      } else if (batchTask.status === "failed") {
-        toast.error("Batch failed");
-      } else {
-        toast.success(`Batch complete: ${batchTask.completed ?? batchTask.success ?? 0} added, ${batchTask.failed} failed`);
-      }
-      useConnectionsStore.setState({ batchTaskId: null });
-      fetch();
+    if (!batchTask) return;
+    const done = batchTask.status === "completed" || batchTask.status === "done" || batchTask.status === "cancelled" || batchTask.status === "failed";
+    if (!done) return;
+
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
-  }, [batchTask, fetch]);
+
+    // Guard: only show toast once per taskId
+    const tid = batchTask.taskId ?? taskId ?? "";
+    if (toastShownRef.current === tid) return;
+    toastShownRef.current = tid;
+
+    if (batchTask.status === "cancelled") {
+      toast("Batch cancelled");
+    } else if (batchTask.status === "failed") {
+      toast.error("Batch failed");
+    } else {
+      toast.success(`Batch complete: ${batchTask.completed ?? (batchTask as any).success ?? 0} added, ${batchTask.failed} failed`);
+    }
+    useConnectionsStore.setState({ batchTaskId: null, batchTask: null });
+    fetch();
+  }, [batchTask, fetch, taskId]);
 
   async function handleStart() {
     const lines = text
@@ -355,45 +376,23 @@ function BatchAddSection() {
           />
 
           <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={providers.includes("codebuddy")}
-                onChange={(e) => {
-                  if (e.target.checked) setProviders(p => [...p, "codebuddy"]);
-                  else setProviders(p => p.filter(x => x !== "codebuddy"));
-                }}
-                disabled={isRunning}
-                className="rounded"
-              />
-              <span>CodeBuddy</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={providers.includes("cline")}
-                onChange={(e) => {
-                  if (e.target.checked) setProviders(p => [...p, "cline"]);
-                  else setProviders(p => p.filter(x => x !== "cline"));
-                }}
-                disabled={isRunning}
-                className="rounded"
-              />
-              <span>Cline</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={providers.includes("kiro")}
-                onChange={(e) => {
-                  if (e.target.checked) setProviders(p => [...p, "kiro"]);
-                  else setProviders(p => p.filter(x => x !== "kiro"));
-                }}
-                disabled={isRunning}
-                className="rounded"
-              />
-              <span>Kiro</span>
-            </label>
+            {[
+              { id: "codebuddy", label: "CodeBuddy" },
+              { id: "cline", label: "Cline" },
+              { id: "kiro", label: "Kiro" },
+            ].map((p) => (
+              <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                <Checkbox
+                  checked={providers.includes(p.id)}
+                  onCheckedChange={(checked) => {
+                    if (checked) setProviders((prev) => [...prev, p.id]);
+                    else setProviders((prev) => prev.filter((x) => x !== p.id));
+                  }}
+                  disabled={isRunning}
+                />
+                <span>{p.label}</span>
+              </label>
+            ))}
           </div>
 
           <div className="flex flex-wrap items-end gap-4">
@@ -451,61 +450,23 @@ function BatchAddSection() {
             )}
           </div>
 
-          {/* Progress + Logs */}
+          {/* Progress bar (inline, no logs — logs are in separate panel) */}
           {batchTask && (isRunning || batchTask.status === "completed" || batchTask.status === "failed" || batchTask.status === "cancelled") && (
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <div className="space-y-2 pt-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>
-                  Task: <code className="text-xs">{taskId ?? batchTask.taskId}</code>
+                  Task: <code className="text-[10px]">{taskId ?? batchTask.taskId}</code>
                 </span>
                 <div className="flex items-center gap-3">
                   {batchTask.failed > 0 && (
-                    <span className="text-xs text-destructive">{batchTask.failed} failed</span>
+                    <span className="text-destructive">{batchTask.failed} failed</span>
                   )}
-                  <span>
-                    {batchTask.completed ?? 0}/{batchTask.total} ({progress}%)
-                  </span>
+                  <span>{batchTask.completed ?? 0}/{batchTask.total} ({progress}%)</span>
                 </div>
               </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                />
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
               </div>
-
-              {/* Live logs */}
-              {batchTask.logs && batchTask.logs.length > 0 && (
-                <div className="rounded-sm border border-border bg-muted/30 overflow-hidden min-w-0">
-                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-muted/50">
-                    <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Logs</span>
-                    <span className="text-[10px] text-muted-foreground">{batchTask.logs.length} entries</span>
-                  </div>
-                  <div className="overflow-y-auto overflow-x-hidden max-h-[250px] p-2" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
-                    <div className="flex flex-col gap-0.5 font-mono text-[11px] min-w-0">
-                      {batchTask.logs.map((log, i) => (
-                        <div key={i} className="flex gap-2 leading-relaxed min-w-0">
-                          <span className="text-muted-foreground shrink-0">[{log.time}]</span>
-                          <span className={`shrink-0 ${
-                            log.level === "error" ? "text-destructive" :
-                            log.level === "success" ? "text-emerald-500" :
-                            "text-foreground"
-                          }`}>
-                            {log.level === "error" ? "✗" : log.level === "success" ? "✓" : "ℹ"}
-                          </span>
-                          <span className={`break-all min-w-0 ${
-                            log.level === "error" ? "text-destructive" :
-                            log.level === "success" ? "text-emerald-500" :
-                            "text-muted-foreground"
-                          }`}>
-                            {log.message}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </CardContent>
@@ -519,16 +480,31 @@ function BatchAddSection() {
 /* ------------------------------------------------------------------ */
 
 function FilterUnconnectedSection() {
-  const { connections, batchConnect, cancelBatch, fetchBatchStatus, batchTaskId, batchTask, batchLoading, fetch } =
+  const { batchConnect, cancelBatch, fetchBatchStatus, batchTaskId, batchTask, batchLoading, fetch } =
     useConnectionsStore();
 
   const [text, setText] = useState("");
-  const [provider, setProvider] = useState<"codebuddy" | "cline" | "kiro">("cline");
+  const [provider, setProvider] = useState<string>("cline");
   const [concurrency, setConcurrency] = useState(2);
   const [headless, setHeadless] = useState(true);
+  const [allLabels, setAllLabels] = useState<{ provider: string; label: string }[]>([]);
 
   const taskId = batchTaskId;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Fetch all labels (lightweight, no pagination) for filtering
+  useEffect(() => {
+    async function loadLabels() {
+      try {
+        const { apiFetch } = await import("@/lib/api");
+        const labels = await apiFetch<{ provider: string; label: string }[]>("/api/connections/labels");
+        setAllLabels(labels);
+      } catch {}
+    }
+    loadLabels();
+  }, []);
+
+  const toastShownRef = useRef<string | null>(null);
 
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -536,35 +512,44 @@ function FilterUnconnectedSection() {
 
   useEffect(() => {
     if (!taskId) return;
+    toastShownRef.current = null;
     fetchBatchStatus(taskId);
     pollRef.current = setInterval(() => fetchBatchStatus(taskId), 2000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [taskId, fetchBatchStatus]);
 
   useEffect(() => {
-    if (
-      batchTask &&
-      (batchTask.status === "completed" || batchTask.status === "done" || batchTask.status === "cancelled" || batchTask.status === "failed")
-    ) {
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-      if (batchTask.status === "cancelled") toast("Batch cancelled");
-      else if (batchTask.status === "failed") toast.error("Batch failed");
-      else toast.success(`Batch complete: ${batchTask.completed ?? batchTask.success ?? 0} added, ${batchTask.failed} failed`);
-      useConnectionsStore.setState({ batchTaskId: null });
-      fetch();
-    }
-  }, [batchTask, fetch]);
+    if (!batchTask) return;
+    const done = batchTask.status === "completed" || batchTask.status === "done" || batchTask.status === "cancelled" || batchTask.status === "failed";
+    if (!done) return;
 
-  // Build set of connected emails per provider
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+
+    const tid = batchTask.taskId ?? taskId ?? "";
+    if (toastShownRef.current === tid) return;
+    toastShownRef.current = tid;
+
+    if (batchTask.status === "cancelled") toast("Batch cancelled");
+    else if (batchTask.status === "failed") toast.error("Batch failed");
+    else toast.success(`Batch complete: ${batchTask.completed ?? (batchTask as any).success ?? 0} added, ${batchTask.failed} failed`);
+    useConnectionsStore.setState({ batchTaskId: null, batchTask: null });
+    fetch();
+    // Refresh labels after batch completes
+    import("@/lib/api").then(({ apiFetch }) =>
+      apiFetch<{ provider: string; label: string }[]>("/api/connections/labels").then(setAllLabels).catch(() => {}),
+    );
+  }, [batchTask, fetch, taskId]);
+
+  // Build set of connected emails per provider from all labels
   const connectedEmails = useMemo(() => {
     const map = new Map<string, Set<string>>();
-    for (const conn of connections) {
-      const p = String((conn as any).provider || "codebuddy");
+    for (const item of allLabels) {
+      const p = item.provider || "Service";
       if (!map.has(p)) map.set(p, new Set());
-      map.get(p)!.add((conn.label ?? conn.email ?? "").toLowerCase());
+      map.get(p)!.add((item.label ?? "").toLowerCase());
     }
     return map;
-  }, [connections]);
+  }, [allLabels]);
 
   // Parse input and filter out already-connected accounts
   const parsed = useMemo(() => {
@@ -620,7 +605,7 @@ function FilterUnconnectedSection() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.3 }}
     >
-      <Card className="mt-3">
+      <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <ListFilter className="h-4 w-4 text-muted-foreground" />
@@ -637,7 +622,7 @@ function FilterUnconnectedSection() {
           <div className="flex items-center gap-3">
             <Label className="text-xs text-muted-foreground shrink-0">Provider:</Label>
             <div className="flex gap-1.5">
-              {(["codebuddy", "cline", "kiro"] as const).map((p) => (
+              {(["codebuddy", "cline", "kiro"] as string[]).map((p) => (
                 <Button
                   key={p}
                   variant={provider === p ? "default" : "outline"}
@@ -747,56 +732,102 @@ function FilterUnconnectedSection() {
             </div>
           </div>
 
-          {/* Progress */}
+          {/* Progress bar (inline, no logs — logs are in separate panel) */}
           {isRunning && batchTask && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">
-                  Task: <code className="text-xs">{taskId ?? batchTask.taskId}</code>
-                </span>
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <div className="flex items-center gap-3">
                   {batchTask.failed > 0 && (
-                    <span className="text-xs text-destructive">{batchTask.failed} failed</span>
+                    <span className="text-destructive">{batchTask.failed} failed</span>
                   )}
-                  <span>
-                    {batchTask.completed ?? 0}/{batchTask.total} ({progress}%)
-                  </span>
+                  <span>{batchTask.completed ?? 0}/{batchTask.total} ({progress}%)</span>
                 </div>
               </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                />
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${progress}%` }} />
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
 
-              {/* Live logs */}
-              {batchTask.logs && batchTask.logs.length > 0 && (
-                <div className="rounded-sm border border-border bg-muted/30 overflow-hidden min-w-0">
-                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-muted/50">
-                    <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Logs</span>
-                    <span className="text-[10px] text-muted-foreground">{batchTask.logs.length} entries</span>
+/* ------------------------------------------------------------------ */
+/*  Batch Logs (shared panel)                                          */
+/* ------------------------------------------------------------------ */
+
+function BatchLogsSection() {
+  const { batchTask, batchTaskId } = useConnectionsStore();
+  const taskId = batchTaskId;
+  const isRunning = !!taskId;
+  const logs = batchTask?.logs ?? [];
+  const hasLogs = logs.length > 0;
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new logs arrive
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs.length]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.35 }}
+    >
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Terminal className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm">Batch Logs</CardTitle>
+            </div>
+            {hasLogs && (
+              <span className="text-[10px] text-muted-foreground">{logs.length} entries</span>
+            )}
+          </div>
+          {batchTask && (
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+              <code>{taskId ?? batchTask.taskId}</code>
+              <span className="ml-auto">
+                {batchTask.completed ?? 0}/{batchTask.total}
+                {batchTask.failed > 0 && (
+                  <span className="text-destructive ml-1">({batchTask.failed} failed)</span>
+                )}
+              </span>
+            </div>
+          )}
+        </CardHeader>
+        <CardContent className="pt-0">
+          {!hasLogs ? (
+            <div className="flex flex-col items-center justify-center h-[200px] text-xs text-muted-foreground gap-1">
+              <Terminal className="h-5 w-5 opacity-30" />
+              {isRunning ? "Waiting for logs..." : "No batch running"}
+            </div>
+          ) : (
+            <div className="rounded-sm border border-border bg-muted/30 overflow-hidden">
+              <div className="overflow-y-auto max-h-[500px] overscroll-contain">
+                {logs.map((log: any, i: number) => (
+                  <div
+                    key={i}
+                    className={`flex gap-2 px-3 py-0.5 text-[11px] font-mono border-b border-border/30 last:border-0 min-w-0 ${
+                      log.level === "error" ? "text-destructive" :
+                      log.level === "success" ? "text-emerald-500" :
+                      log.level === "warn" ? "text-amber-400" :
+                      "text-muted-foreground"
+                    }`}
+                  >
+                    <span className="shrink-0 text-muted-foreground/60 w-[52px]">{log.time}</span>
+                    <span className="shrink-0 w-3">
+                      {log.level === "error" ? "\u2717" : log.level === "success" ? "\u2713" : log.level === "warn" ? "\u26A0" : "\u2139"}
+                    </span>
+                    <span className="break-all min-w-0">{log.message}</span>
                   </div>
-                  <div className="max-h-[200px] overflow-y-auto p-0 min-w-0">
-                    <div className="min-w-0">
-                      {batchTask.logs.map((log: any, i: number) => (
-                        <div
-                          key={i}
-                          className={`flex gap-2 px-3 py-0.5 text-[11px] font-mono border-b border-border/30 last:border-0 min-w-0 ${
-                            log.level === "error" ? "text-destructive" : log.level === "warn" ? "text-amber-400" : "text-muted-foreground"
-                          }`}
-                        >
-                          <span className="shrink-0 text-muted-foreground/60 w-[60px]">{log.time}</span>
-                          <span className="shrink-0 w-3">
-                            {log.level === "error" ? "\u2717" : log.level === "warn" ? "\u26A0" : "\u2139"}
-                          </span>
-                          <span className="break-all min-w-0">{log.message}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+                ))}
+                <div ref={logEndRef} />
+              </div>
             </div>
           )}
         </CardContent>
@@ -810,23 +841,44 @@ function FilterUnconnectedSection() {
 /* ------------------------------------------------------------------ */
 
 export default function AccountsPage() {
-  const { connections, loading, error, fetch, enable, disable, checkToken, checkAllCredits, removeExhausted, removeExpired, removeBanned, exportData, importData, remove } =
+  const { connections, pagination, loading, error, fetch, fetchParams, setFetchParams, enable, disable, checkToken, checkAllCredits, removeExhausted, removeExpired, removeBanned, exportData, importData, remove } =
     useConnectionsStore();
   const importRef = useRef<HTMLInputElement>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [checkingCredits, setCheckingCredits] = useState(false);
-  const creditPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [searchInput, setSearchInput] = useState("");
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch + start background credit polling
+  // Fetch connections on mount (no auto credit check — manual only to avoid token invalidation on IP change)
   useEffect(() => {
     fetch();
-    // Check credits on mount
-    checkAllCredits();
-    // Poll every 60s
-    creditPollRef.current = setInterval(() => checkAllCredits(), 60_000);
-    return () => { if (creditPollRef.current) clearInterval(creditPollRef.current); };
-  }, [fetch, checkAllCredits]);
+  }, [fetch]);
+
+  /* ---- pagination helpers ---- */
+  const goToPage = useCallback((page: number) => {
+    fetch({ page });
+  }, [fetch]);
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      fetch({ search: value || undefined, page: 1 });
+    }, 300);
+  }, [fetch]);
+
+  const handleProviderFilter = useCallback((provider: string) => {
+    fetch({ provider: provider || undefined, page: 1 });
+  }, [fetch]);
+
+  const handleStatusFilter = useCallback((status: string) => {
+    fetch({ status: status || undefined, page: 1 });
+  }, [fetch]);
+
+  const handleLimitChange = useCallback((limit: number) => {
+    fetch({ limit, page: 1 });
+  }, [fetch]);
 
   /* ---- actions ---- */
   const handleToggle = useCallback(
@@ -904,7 +956,7 @@ export default function AccountsPage() {
           <CardHeader>
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle>Connections</CardTitle>
-              <Badge variant="secondary">{connections.length}</Badge>
+              <Badge variant="secondary">{pagination.total}</Badge>
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
@@ -1028,6 +1080,41 @@ export default function AccountsPage() {
               </div>
             )}
 
+            {/* ---- Filters ---- */}
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  placeholder="Search accounts..."
+                  value={searchInput}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  className="h-8 w-[200px] pl-8 text-xs"
+                />
+              </div>
+              <Select value={fetchParams.provider || "all"} onValueChange={(v: string | null) => handleProviderFilter(!v || v === "all" ? "" : v)}>
+                <SelectTrigger size="sm" className="text-xs">
+                  <SelectValue placeholder="All Providers" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Providers</SelectItem>
+                  <SelectItem value="codebuddy">CodeBuddy (CB)</SelectItem>
+                  <SelectItem value="cline">Cline (CL)</SelectItem>
+                  <SelectItem value="kiro">Kiro (KR)</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={fetchParams.status || "all"} onValueChange={(v: string | null) => handleStatusFilter(!v || v === "all" ? "" : v)}>
+                <SelectTrigger size="sm" className="text-xs">
+                  <SelectValue placeholder="All Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="expired">Expired</SelectItem>
+                  <SelectItem value="disabled">Disabled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1050,7 +1137,9 @@ export default function AccountsPage() {
                 ) : connections.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                      No accounts connected
+                      {(fetchParams.search || fetchParams.provider || fetchParams.status)
+                        ? "No accounts match the current filters"
+                        : "No accounts connected"}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -1067,15 +1156,85 @@ export default function AccountsPage() {
                 )}
               </TableBody>
             </Table>
+
+            {/* ---- Pagination Controls ---- */}
+            {pagination.totalPages > 0 && (
+              <div className="flex items-center justify-between pt-4 border-t border-border mt-4">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>Rows per page:</span>
+                  <Select value={String(pagination.limit)} onValueChange={(v: string | null) => handleLimitChange(Number(v ?? 20))}>
+                    <SelectTrigger size="sm" className="text-xs w-16">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[10, 20, 50, 100].map((n) => (
+                        <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="ml-2">
+                    {((pagination.page - 1) * pagination.limit) + 1}
+                    {"\u2013"}
+                    {Math.min(pagination.page * pagination.limit, pagination.total)}
+                    {" of "}
+                    {pagination.total}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon-xs"
+                    onClick={() => goToPage(1)}
+                    disabled={pagination.page <= 1}
+                    title="First page"
+                  >
+                    <ChevronsLeft className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon-xs"
+                    onClick={() => goToPage(pagination.page - 1)}
+                    disabled={pagination.page <= 1}
+                    title="Previous page"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="px-2 text-xs text-muted-foreground">
+                    {pagination.page} / {pagination.totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="icon-xs"
+                    onClick={() => goToPage(pagination.page + 1)}
+                    disabled={pagination.page >= pagination.totalPages}
+                    title="Next page"
+                  >
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon-xs"
+                    onClick={() => goToPage(pagination.totalPages)}
+                    disabled={pagination.page >= pagination.totalPages}
+                    title="Last page"
+                  >
+                    <ChevronsRight className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </motion.div>
 
-      {/* ---- Batch Add ---- */}
-      <BatchAddSection />
-
-      {/* ---- Filter Unconnected ---- */}
-      <FilterUnconnectedSection />
+      {/* ---- Batch Add + Filter (stacked left) | Logs (right) ---- */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+        <div className="flex flex-col gap-4">
+          <BatchAddSection />
+          <FilterUnconnectedSection />
+        </div>
+        <BatchLogsSection />
+      </div>
     </>
   );
 }
