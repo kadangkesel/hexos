@@ -110,6 +110,7 @@ function SheetContent({
   return (
     <SheetPrimitive.Content forceMount {...props} render={<motion.div key="sheet-content" data-slot="sheet-content" data-side={side} initial={offscreen[side]} animate={{ [axis]: 0, opacity: 1 }} exit={offscreen[side]} style={{
                 position: 'fixed',
+                zIndex: 50,
                 ...positionStyle[side],
                 ...style,
               }} transition={transition} />}>{children}</SheetPrimitive.Content>

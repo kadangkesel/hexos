@@ -952,7 +952,7 @@ export default function AccountsPage() {
         transition={{ delay: 0.1 }}
         className="mb-6"
       >
-        <Card>
+        <Card className="min-w-0 overflow-hidden">
           <CardHeader>
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle>Connections</CardTitle>

@@ -134,7 +134,7 @@ function UsageByAccountCard({ data, loading }: { data: Array<Record<string, unkn
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.8 }}
     >
-      <Card>
+      <Card className="min-w-0 overflow-hidden">
         <CardHeader>
           <div className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-500">
@@ -630,14 +630,14 @@ export default function DashboardPage() {
       </motion.div>
 
       {/* ---- Tables Row ---- */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2 min-w-0">
         {/* Usage by Model */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.7 }}
         >
-          <Card>
+          <Card className="min-w-0 overflow-hidden">
             <CardHeader>
               <div className="flex items-center gap-2.5">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-violet-500/10 text-violet-500">
