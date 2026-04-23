@@ -30,5 +30,11 @@ dashboard/.next/
 dashboard/node_modules/
 dashboard/out/
 
-# Claude/AI config
+# Reverse engineering docs (sensitive)
+docs/cline-account-api.md
+docs/kiro-api.md
+docs/kiro-cli-api.md
+docs/windsurf-reverse-engineering.md
+
+# Assistant/AI config
 .claude/
