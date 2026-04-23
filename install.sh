@@ -354,6 +354,9 @@ main() {
     local plist="$HOME/Library/LaunchAgents/net.kadangkesel.hexos.plist"
     launchctl unload "$plist" 2>/dev/null || true
   fi
+  # Also kill any running hexos process (e.g. from 'hexos update' calling this installer)
+  pkill -f "hexos start" 2>/dev/null || true
+  sleep 1
 
   # Install binary
   local binary_src="$tmp_dir/extracted/hexos"
@@ -367,8 +370,11 @@ main() {
     exit 1
   fi
 
+  # Use rename trick to avoid "Text file busy" — remove old binary first, then copy new
+  rm -f "$BIN_DIR/hexos" 2>/dev/null || mv "$BIN_DIR/hexos" "$BIN_DIR/hexos.old" 2>/dev/null || true
   cp "$binary_src" "$BIN_DIR/hexos"
   chmod +x "$BIN_DIR/hexos"
+  rm -f "$BIN_DIR/hexos.old" 2>/dev/null || true
 
   # Install dashboard
   local dashboard_src="$tmp_dir/extracted/dashboard"
