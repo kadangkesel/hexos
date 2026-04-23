@@ -21,12 +21,12 @@ export interface UsageRecord {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  // Credit cost (estimated)
-  creditCost: number;
   // Response info
   status: number; // HTTP status
   latencyMs: number;
   success: boolean;
+  // Legacy field (kept for backward compat with existing records, always 0 for new)
+  creditCost?: number;
 }
 
 export interface UsageStats {
@@ -34,7 +34,6 @@ export interface UsageStats {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   totalTokens: number;
-  totalCreditCost: number;
   avgLatencyMs: number;
   successRate: number;
   byModel: Record<string, ModelStats>;
@@ -47,7 +46,6 @@ export interface ModelStats {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  creditCost: number;
 }
 
 export interface AccountStats {
@@ -57,43 +55,11 @@ export interface AccountStats {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  creditCost: number;
   lastUsed: number;
 }
 
 interface UsageDbSchema {
   records: UsageRecord[];
-}
-
-// ---------------------------------------------------------------------------
-// Credit cost estimation per model (credits per 1K tokens)
-// Based on CodeBuddy pricing tiers
-// ---------------------------------------------------------------------------
-
-const CREDIT_RATES: Record<string, { prompt: number; completion: number }> = {
-  // Claude models (expensive)
-  "claude-opus-4.6":    { prompt: 0.30, completion: 0.60 },
-  "claude-haiku-4.5":   { prompt: 0.05, completion: 0.10 },
-  // GPT models
-  "gpt-5.4":            { prompt: 0.20, completion: 0.40 },
-  "gpt-5.2":            { prompt: 0.15, completion: 0.30 },
-  "gpt-5.1":            { prompt: 0.10, completion: 0.20 },
-  "gpt-5.1-codex":      { prompt: 0.10, completion: 0.20 },
-  "gpt-5.1-codex-mini": { prompt: 0.05, completion: 0.10 },
-  // Gemini models
-  "gemini-3.1-pro":     { prompt: 0.10, completion: 0.20 },
-  "gemini-3.0-flash":   { prompt: 0.03, completion: 0.06 },
-  "gemini-2.5-pro":     { prompt: 0.08, completion: 0.16 },
-  "gemini-2.5-flash":   { prompt: 0.02, completion: 0.04 },
-  // Other
-  "kimi-k2.5":          { prompt: 0.05, completion: 0.10 },
-  "glm-5.0":            { prompt: 0.05, completion: 0.10 },
-  "default-model":      { prompt: 0.10, completion: 0.20 },
-};
-
-function estimateCreditCost(model: string, promptTokens: number, completionTokens: number): number {
-  const rate = CREDIT_RATES[model] ?? { prompt: 0.10, completion: 0.20 };
-  return (promptTokens / 1000) * rate.prompt + (completionTokens / 1000) * rate.completion;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +88,6 @@ export async function recordUsage(params: {
   success: boolean;
 }): Promise<UsageRecord> {
   const totalTokens = params.promptTokens + params.completionTokens;
-  const creditCost = estimateCreditCost(params.model, params.promptTokens, params.completionTokens);
 
   const record: UsageRecord = {
     id: crypto.randomUUID(),
@@ -134,7 +99,6 @@ export async function recordUsage(params: {
     promptTokens: params.promptTokens,
     completionTokens: params.completionTokens,
     totalTokens,
-    creditCost: Math.round(creditCost * 100) / 100,
     status: params.status,
     latencyMs: params.latencyMs,
     success: params.success,
@@ -155,7 +119,6 @@ export async function recordUsage(params: {
     `prompt: ${record.promptTokens.toLocaleString()} | ` +
     `completion: ${record.completionTokens.toLocaleString()} | ` +
     `total: ${record.totalTokens.toLocaleString()} | ` +
-    `credit: ${record.creditCost} | ` +
     `${record.latencyMs}ms`
   );
 
@@ -206,7 +169,6 @@ export function getStats(since?: number): UsageStats {
     totalPromptTokens: 0,
     totalCompletionTokens: 0,
     totalTokens: 0,
-    totalCreditCost: 0,
     avgLatencyMs: 0,
     successRate: 0,
     byModel: {},
@@ -222,7 +184,6 @@ export function getStats(since?: number): UsageStats {
     stats.totalPromptTokens += r.promptTokens;
     stats.totalCompletionTokens += r.completionTokens;
     stats.totalTokens += r.totalTokens;
-    stats.totalCreditCost += r.creditCost;
     totalLatency += r.latencyMs;
     if (r.success) successCount++;
 
@@ -234,7 +195,6 @@ export function getStats(since?: number): UsageStats {
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
-        creditCost: 0,
       };
     }
     const m = stats.byModel[r.model];
@@ -242,7 +202,6 @@ export function getStats(since?: number): UsageStats {
     m.promptTokens += r.promptTokens;
     m.completionTokens += r.completionTokens;
     m.totalTokens += r.totalTokens;
-    m.creditCost += r.creditCost;
 
     // By account
     if (!stats.byAccount[r.accountId]) {
@@ -253,7 +212,6 @@ export function getStats(since?: number): UsageStats {
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
-        creditCost: 0,
         lastUsed: 0,
       };
     }
@@ -262,21 +220,11 @@ export function getStats(since?: number): UsageStats {
     a.promptTokens += r.promptTokens;
     a.completionTokens += r.completionTokens;
     a.totalTokens += r.totalTokens;
-    a.creditCost += r.creditCost;
     if (r.timestamp > a.lastUsed) a.lastUsed = r.timestamp;
   }
 
-  stats.totalCreditCost = Math.round(stats.totalCreditCost * 100) / 100;
   stats.avgLatencyMs = Math.round(totalLatency / records.length);
   stats.successRate = Math.round((successCount / records.length) * 100);
-
-  // Round credit costs
-  for (const m of Object.values(stats.byModel)) {
-    m.creditCost = Math.round(m.creditCost * 100) / 100;
-  }
-  for (const a of Object.values(stats.byAccount)) {
-    a.creditCost = Math.round(a.creditCost * 100) / 100;
-  }
 
   return stats;
 }

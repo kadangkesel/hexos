@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import {
   TrendingUp,
   Cpu,
-  DollarSign,
   CheckCircle,
   Users,
   Clock,
@@ -60,10 +59,6 @@ function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
-function formatCost(n: number): string {
-  return "$" + n.toFixed(2);
-}
-
 function formatPercent(n: number): string {
   return n.toFixed(1) + "%";
 }
@@ -98,13 +93,6 @@ const STAT_DEFS: StatDef[] = [
     getValue: (u, _a, s) => formatNumber(u.totalTokens ?? (s.totalTokens as number) ?? 0),
     icon: <Cpu className="h-4 w-4" />,
     iconBg: "bg-violet-500/10 text-violet-500",
-  },
-  {
-    title: "Credit Cost",
-    desc: "Estimated spend",
-    getValue: (u) => formatCost(u.totalCreditCost ?? 0),
-    icon: <DollarSign className="h-4 w-4" />,
-    iconBg: "bg-amber-500/10 text-amber-500",
   },
   {
     title: "Success Rate",
@@ -169,20 +157,19 @@ function UsageByAccountCard({ data, loading }: { data: Array<Record<string, unkn
                   <TableHead>Account</TableHead>
                   <TableHead className="text-right">Requests</TableHead>
                   <TableHead className="text-right">Tokens</TableHead>
-                  <TableHead className="text-right">Cost</TableHead>
                   <TableHead className="text-right">Last Used</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading && data.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
                       Loading...
                     </TableCell>
                   </TableRow>
                 ) : data.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
                       No data
                     </TableCell>
                   </TableRow>
@@ -197,9 +184,6 @@ function UsageByAccountCard({ data, loading }: { data: Array<Record<string, unkn
                       </TableCell>
                       <TableCell className="text-right">
                         {formatNumber((a.totalTokens as number) ?? (a.tokens as number) ?? 0)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatCost((a.creditCost as number) ?? 0)}
                       </TableCell>
                       <TableCell className="text-right text-xs text-muted-foreground">
                         {(() => {
@@ -401,7 +385,7 @@ export default function DashboardPage() {
       <PageHeader title="Dashboard" subtitle="Overview of your Hexos gateway" />
 
       {/* ---- Stat Cards ---- */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6 mb-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5 mb-6">
         {STAT_DEFS.map((stat, index) => (
           <motion.div
             key={stat.title}
@@ -672,19 +656,18 @@ export default function DashboardPage() {
                     <TableHead>Model</TableHead>
                     <TableHead className="text-right">Requests</TableHead>
                     <TableHead className="text-right">Tokens</TableHead>
-                    <TableHead className="text-right">Cost</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {dashLoading && sortedByModel.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={3} className="text-center py-8 text-muted-foreground">
                         Loading...
                       </TableCell>
                     </TableRow>
                   ) : sortedByModel.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={3} className="text-center py-8 text-muted-foreground">
                         No data
                       </TableCell>
                     </TableRow>
@@ -709,9 +692,6 @@ export default function DashboardPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             {formatNumber((m.totalTokens as number) ?? (m.tokens as number) ?? 0)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {formatCost((m.creditCost as number) ?? 0)}
                           </TableCell>
                         </TableRow>
                       );

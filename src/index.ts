@@ -336,7 +336,6 @@ usage
     console.log(`  Prompt:       ${chalk.yellow(stats.totalPromptTokens.toLocaleString())} tokens`);
     console.log(`  Completion:   ${chalk.yellow(stats.totalCompletionTokens.toLocaleString())} tokens`);
     console.log(`  Total:        ${chalk.bold(stats.totalTokens.toLocaleString())} tokens`);
-    console.log(`  Credit Cost:  ${chalk.red(String(stats.totalCreditCost))} credits`);
     console.log(`  Avg Latency:  ${stats.avgLatencyMs}ms`);
 
     const models = Object.values(stats.byModel);
@@ -346,8 +345,7 @@ usage
         console.log(
           `    ${chalk.cyan(m.model.padEnd(25))} ` +
           `${String(m.requests).padStart(4)} req  ` +
-          `${m.totalTokens.toLocaleString().padStart(10)} tok  ` +
-          `${chalk.red(String(m.creditCost).padStart(8))} credits`
+          `${m.totalTokens.toLocaleString().padStart(10)} tok`
         );
       }
     }
@@ -359,8 +357,7 @@ usage
         console.log(
           `    ${chalk.cyan(a.accountLabel.padEnd(30))} ` +
           `${String(a.requests).padStart(4)} req  ` +
-          `${a.totalTokens.toLocaleString().padStart(10)} tok  ` +
-          `${chalk.red(String(a.creditCost).padStart(8))} credits`
+          `${a.totalTokens.toLocaleString().padStart(10)} tok`
         );
       }
     }
@@ -402,7 +399,6 @@ usage
         `${String(r.promptTokens.toLocaleString()).padStart(9)} ` +
         `${String(r.completionTokens.toLocaleString()).padStart(9)} ` +
         `${chalk.bold(String(r.totalTokens.toLocaleString()).padStart(9))} ` +
-        `${chalk.red(String(r.creditCost).padStart(9))} ` +
         `${statusIcon} ${r.latencyMs}ms`
       );
     }

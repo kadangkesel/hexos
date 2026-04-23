@@ -253,7 +253,7 @@ export default function DocsPage() {
         <P>
           Hexos is an AI API proxy with multi-account management and load balancing.
           It routes requests through multiple provider accounts using a least-used strategy,
-          supports both OpenAI and Anthropic API formats, tracks token usage and credit costs,
+          supports both OpenAI and Anthropic API formats, tracks token usage,
           and automatically fails over when accounts are rate-limited or exhausted.
         </P>
 
@@ -429,7 +429,7 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
         <Endpoint method="GET" path="/health" />
         <P>No authentication required.</P>
         <CodeBlock code={`curl http://127.0.0.1:7470/health`} label="curl" lang="bash" />
-        <CodeBlock code={`{"status":"ok","connections":9,"totalRequests":42,"totalTokens":1250000,"totalCreditCost":125.50}`} label="response" lang="json" />
+        <CodeBlock code={`{"status":"ok","connections":9,"totalRequests":42,"totalTokens":1250000}`} label="response" lang="json" />
 
         {/* Usage Stats */}
         <H3 id="usage-stats">Usage Stats</H3>
@@ -441,7 +441,6 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
   "totalPromptTokens": 1200000,
   "totalCompletionTokens": 50000,
   "totalTokens": 1250000,
-  "totalCreditCost": 125.50,
   "avgLatencyMs": 3500,
   "successRate": 95.2,
   "byModel": { "claude-opus-4.6": { "requests": 30, "totalTokens": 940000 } },
@@ -466,7 +465,6 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
   "promptTokens": 24335,
   "completionTokens": 61,
   "totalTokens": 24396,
-  "creditCost": 7.34,
   "latencyMs": 3892,
   "success": true
 }]`} label="response" lang="json" />

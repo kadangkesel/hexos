@@ -68,13 +68,6 @@ function formatTokens(value: unknown): string {
   return num.toLocaleString();
 }
 
-function formatCost(value: unknown): string {
-  if (value == null) return "-";
-  const num = Number(value);
-  if (isNaN(num)) return "-";
-  return num.toFixed(4);
-}
-
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
@@ -240,7 +233,6 @@ export default function LogsPage() {
                     <TableHead className="text-right">Prompt</TableHead>
                     <TableHead className="text-right">Completion</TableHead>
                     <TableHead className="text-right">Total</TableHead>
-                    <TableHead className="text-right">Cost</TableHead>
                     <TableHead className="text-right">Latency</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
@@ -278,9 +270,6 @@ export default function LogsPage() {
                         </TableCell>
                         <TableCell className="text-right font-mono text-xs">
                           {formatTokens(r.totalTokens)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-xs">
-                          {formatCost(r.creditCost)}
                         </TableCell>
                         <TableCell className="text-right font-mono text-xs">
                           {r.latencyMs != null
