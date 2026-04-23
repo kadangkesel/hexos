@@ -20,7 +20,8 @@ import {
   List,
   Search,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { apiFetch } from "@/lib/api";
 import { motion, AnimatePresence } from "motion/react";
 
 import {
@@ -67,6 +68,13 @@ export function AppSidebar() {
   const isDocsPage = pathname === "/docs";
   const [proxyOpen, setProxyOpen] = useState(pathname.startsWith("/proxy"));
   const [docsOpen, setDocsOpen] = useState(isDocsPage);
+  const [version, setVersion] = useState("...");
+
+  useEffect(() => {
+    apiFetch<{ version: string }>("/api/system")
+      .then((data) => setVersion(`v${data.version}`))
+      .catch(() => setVersion("v0.1.0"));
+  }, []);
 
   return (
     <Sidebar collapsible="icon">
@@ -87,7 +95,7 @@ export function AppSidebar() {
                     <span className="text-primary font-bold">Hex</span>os
                   </span>
                   <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium leading-none text-primary w-fit">
-                    v0.1.0
+                    {version}
                   </span>
                 </div>
               </Link>
