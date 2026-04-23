@@ -76,7 +76,9 @@ export function createApp() {
       object: "model",
       created: 0,
       owned_by: "hexos",
+      // Include both field names for maximum client compatibility
       context_length: m.contextWindow ?? 200000,
+      context_window: m.contextWindow ?? 200000,
     }));
     return c.json({ object: "list", data: models });
   });
