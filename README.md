@@ -77,47 +77,6 @@ hexos update                       Update hexos to latest version
 hexos uninstall                    Uninstall hexos (preserves data)
 ```
 
-## Providers & Models
-
-### CodeBuddy (prefix: `cb/`)
-
-| Model ID | Context |
-|----------|---------|
-| `cb/claude-opus-4.6` | 1M |
-| `cb/claude-haiku-4.5` | 200K |
-| `cb/gpt-5.4` | 1M |
-| `cb/gpt-5.2` | 200K |
-| `cb/gpt-5.1` / `cb/gpt-5.1-codex` | 1M |
-| `cb/gpt-5.1-codex-mini` | 200K |
-| `cb/gemini-2.5-pro` / `cb/gemini-2.5-flash` | 1M |
-| `cb/gemini-3.1-pro` / `cb/gemini-3.0-flash` | 1M |
-| `cb/kimi-k2.5` | 131K |
-| `cb/glm-5.0` | 128K |
-
-### Cline (prefix: `cl/`)
-
-| Model ID | Context |
-|----------|---------|
-| `cl/claude-opus-4.7` / `cl/claude-opus-4.6` | 1M |
-| `cl/claude-sonnet-4.6` | 1M |
-| `cl/claude-haiku-4.5` | 200K |
-| `cl/grok-4` | 256K |
-| `cl/gemini-2.5-pro` / `cl/gemini-2.5-flash` | 1M |
-| `cl/deepseek-v3.2` / `cl/deepseek-r1` | 128K |
-| `cl/kimi-k2.6` | 131K |
-| `cl/gemma-4-26b:free` / `cl/minimax-m2.5:free` / `cl/gpt-oss-120b:free` | Free tier |
-
-### Kiro (prefix: `kr/`)
-
-| Model ID | Context |
-|----------|---------|
-| `kr/claude-sonnet-4.5` / `kr/claude-sonnet-4` | 200K |
-| `kr/claude-haiku-4.5` | 200K |
-| `kr/deepseek-3.2` | 128K |
-| `kr/qwen3-coder-next` | 131K |
-| `kr/glm-5` | 128K |
-| `kr/minimax-m2.1` | 1M |
-
 ## API Endpoints
 
 | Method | Path | Description |
