@@ -34,7 +34,8 @@ jobs:
             archive-ext: tar.gz
             archive-name-os: darwin
             archive-name-arch: arm64
-          - os: macos-13
+          # darwin-x64 cross-compiled from ARM runner (macos-13 Intel runners are unreliable)
+          - os: macos-latest
             target: darwin-x64
             bun-target: bun-darwin-x64
             binary-name: hexos
