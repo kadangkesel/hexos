@@ -21,7 +21,7 @@ const program = new Command();
 program
   .name("hexos")
   .description("Lightweight AI API proxy")
-  .version("0.1.3");
+  .version("0.1.4");
 
 // Start server
 program
