@@ -347,6 +347,14 @@ main() {
     tar xzf "$tmp_dir/$archive_name" -C "$tmp_dir/extracted"
   }
 
+  # Stop running service before replacing binary (prevents "Text file busy")
+  if [ "$(uname -s)" = "Linux" ] && command -v systemctl &>/dev/null; then
+    systemctl --user stop hexos.service 2>/dev/null || true
+  elif [ "$(uname -s)" = "Darwin" ]; then
+    local plist="$HOME/Library/LaunchAgents/net.kadangkesel.hexos.plist"
+    launchctl unload "$plist" 2>/dev/null || true
+  fi
+
   # Install binary
   local binary_src="$tmp_dir/extracted/hexos"
   if [ ! -f "$binary_src" ]; then
