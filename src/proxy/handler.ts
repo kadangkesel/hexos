@@ -286,6 +286,65 @@ function pickConnection(providerId: string, triedIds: Set<string>): Connection |
 }
 
 /**
+ * Sanitize tool definitions for upstream compatibility.
+ * CodeBuddy doesn't support OpenAI's `strict` mode or `additionalProperties` in tool schemas.
+ * Also strips deeply nested schema features that cause "invalid function call parameters".
+ */
+function sanitizeTools(tools: any[]): any[] {
+  return tools.map((tool) => {
+    if (tool.type !== "function" || !tool.function) return tool;
+
+    const fn = { ...tool.function };
+
+    // Remove strict mode (CodeBuddy doesn't support it)
+    delete fn.strict;
+
+    // Clean up parameters schema
+    if (fn.parameters) {
+      fn.parameters = sanitizeSchema(fn.parameters);
+    }
+
+    return { type: "function", function: fn };
+  });
+}
+
+/** Recursively clean JSON schema for upstream compatibility */
+function sanitizeSchema(schema: any): any {
+  if (!schema || typeof schema !== "object") return schema;
+
+  const cleaned = { ...schema };
+
+  // Remove additionalProperties (CodeBuddy may not support it)
+  delete cleaned.additionalProperties;
+
+  // Remove $schema, $defs references
+  delete cleaned.$schema;
+
+  // Recursively clean nested properties
+  if (cleaned.properties) {
+    const props: Record<string, any> = {};
+    for (const [key, value] of Object.entries(cleaned.properties)) {
+      props[key] = sanitizeSchema(value);
+    }
+    cleaned.properties = props;
+  }
+
+  // Clean items in arrays
+  if (cleaned.items) {
+    cleaned.items = sanitizeSchema(cleaned.items);
+  }
+
+  // Clean anyOf/oneOf/allOf
+  for (const key of ["anyOf", "oneOf", "allOf"]) {
+    if (Array.isArray(cleaned[key])) {
+      cleaned[key] = cleaned[key].map((s: any) => sanitizeSchema(s));
+    }
+  }
+
+  return cleaned;
+}
+
+/**
  * Build the sanitized upstream request body.
  */
 function buildUpstreamBody(body: any, model: string, stream: boolean): { finalBodyStr: string; model: string } {
@@ -334,12 +393,14 @@ function buildUpstreamBody(body: any, model: string, stream: boolean): { finalBo
   upstreamBody.messages = augmentMessages(upstreamBody.messages);
 
   if (Array.isArray(tools) && tools.length > 0) {
-    upstreamBody.tools = applyRulesDeep(tools);
+    upstreamBody.tools = sanitizeTools(tools);
     if (tool_choice) upstreamBody.tool_choice = tool_choice;
   }
 
   const sanitizedBody = applyRulesDeep(upstreamBody) as any;
   sanitizedBody.model = model;
+  // Restore tools after applyRulesDeep (don't mangle tool schemas)
+  if (upstreamBody.tools) sanitizedBody.tools = upstreamBody.tools;
 
   return { finalBodyStr: JSON.stringify(sanitizedBody), model };
 }
