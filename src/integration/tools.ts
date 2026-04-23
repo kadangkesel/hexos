@@ -486,12 +486,13 @@ const handlers: Record<string, ToolHandler> = {
         modelsList = buildAllModelsList();
       }
 
-      // Build per-model entries for custom_providers with actual context lengths
-      const modelsConfig: Record<string, { context_length: number }> = {};
-      for (const m of modelsList) {
-        const catalogEntry = MODEL_CATALOG[m.id];
-        modelsConfig[m.id] = { context_length: catalogEntry?.info.contextWindow ?? 200000 };
-      }
+      // Build one custom_providers entry per model (Hermes expects this format)
+      const customProviders = modelsList.map((m) => ({
+        name: "hexos",
+        base_url: `${baseUrl}/v1`,
+        api_key: apiKey,
+        model: m.id,
+      }));
 
       return {
         model: {
@@ -500,15 +501,7 @@ const handlers: Record<string, ToolHandler> = {
           base_url: `${baseUrl}/v1`,
           api_key: apiKey,
         },
-        custom_providers: [
-          {
-            name: "hexos",
-            base_url: `${baseUrl}/v1`,
-            key_env: "",
-            api_key: apiKey,
-            models: modelsConfig,
-          },
-        ],
+        custom_providers: customProviders,
       };
     },
     isBound(config) {
