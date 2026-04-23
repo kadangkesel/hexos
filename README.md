@@ -94,7 +94,7 @@ cd dashboard && bun install && bun dev
 
 ```bash
 cd dashboard && bun install && bun dev
-# Open http://localhost:3000
+# Open http://localhost:7471
 ```
 
 ### Pages

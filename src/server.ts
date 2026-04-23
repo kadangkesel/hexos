@@ -40,7 +40,7 @@ export function createApp() {
 
   // CORS for dashboard
   app.use("/api/*", cors({
-    origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
+    origin: ["http://localhost:7471", "http://127.0.0.1:7471"],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
   }));
@@ -937,7 +937,7 @@ export function createApp() {
   app.get("/api/integrations", async (c) => {
     const keys = getApiKeys();
     const apiKey = keys.length > 0 ? keys[0] : "";
-    const baseUrl = `http://127.0.0.1:${c.req.header("host")?.split(":")[1] || "8080"}`;
+    const baseUrl = `http://127.0.0.1:${c.req.header("host")?.split(":")[1] || "7470"}`;
     const tools = await detectTools(apiKey, baseUrl);
     return c.json(tools);
   });
@@ -947,7 +947,7 @@ export function createApp() {
     const toolId = c.req.param("toolId");
     const keys = getApiKeys();
     const apiKey = keys.length > 0 ? keys[0] : "";
-    const baseUrl = `http://127.0.0.1:${c.req.header("host")?.split(":")[1] || "8080"}`;
+    const baseUrl = `http://127.0.0.1:${c.req.header("host")?.split(":")[1] || "7470"}`;
     let modelMap: Record<string, string> | undefined;
     try {
       const body = await c.req.json();
@@ -976,7 +976,7 @@ export function createApp() {
     const toolId = c.req.param("toolId");
     const keys = getApiKeys();
     const apiKey = keys.length > 0 ? keys[0] : "";
-    const baseUrl = `http://127.0.0.1:${c.req.header("host")?.split(":")[1] || "8080"}`;
+    const baseUrl = `http://127.0.0.1:${c.req.header("host")?.split(":")[1] || "7470"}`;
     // Parse modelMap from query params: ?ANTHROPIC_MODEL=xxx&ANTHROPIC_DEFAULT_OPUS_MODEL=yyy
     const modelMap: Record<string, string> = {};
     for (const [k, v] of Object.entries(c.req.query())) {

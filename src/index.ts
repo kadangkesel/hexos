@@ -25,7 +25,7 @@ program
 program
   .command("start")
   .description("Start the proxy server")
-  .option("-p, --port <port>", "Port to listen on", "8080")
+  .option("-p, --port <port>", "Port to listen on", "7470")
   .option("--host <host>", "Host to bind", "127.0.0.1")
   .action(async (opts) => {
     const app = createApp();

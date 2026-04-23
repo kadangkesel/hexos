@@ -140,12 +140,12 @@ export default function ApiKeyPage() {
             </span>
             <div className="flex items-center gap-2 mt-1">
               <span className="flex-1 rounded-sm border border-border bg-muted/50 px-3 py-2 font-mono text-sm select-all truncate">
-                http://127.0.0.1:8080/v1
+                http://127.0.0.1:7470/v1
               </span>
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => copyToClipboard("http://127.0.0.1:8080/v1", "Base URL copied")}
+                onClick={() => copyToClipboard("http://127.0.0.1:7470/v1", "Base URL copied")}
               >
                 <Copy className="size-4" />
               </Button>

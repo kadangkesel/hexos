@@ -30,7 +30,7 @@ export interface ToolConfig {
   showModelCheckboxes?: boolean; // show checkboxes to select which models to include
 }
 
-const PROXY_BASE = "http://127.0.0.1:8080";
+const PROXY_BASE = "http://127.0.0.1:7470";
 
 /** Build full model map from catalog for OpenCode/OpenClaw config */
 function buildAllModels(): Record<string, { name: string }> {

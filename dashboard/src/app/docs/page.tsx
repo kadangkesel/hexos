@@ -287,7 +287,7 @@ export default function DocsPage() {
         {[
           {
             id: "server-commands", title: "Server", cmds: [
-              ["hexos start", "Start proxy (default 127.0.0.1:8080)"],
+              ["hexos start", "Start proxy (default 127.0.0.1:7470)"],
               ["hexos start -p 3001 --host 0.0.0.0", "Custom port and host"],
             ],
           },
@@ -360,7 +360,7 @@ user3@gmail.com|password789|My Custom Label`} label="accounts.txt" lang="text" /
           API Reference
         </H2>
         <P>
-          Base URL: <InlineCode>http://127.0.0.1:8080</InlineCode> — All{" "}
+          Base URL: <InlineCode>http://127.0.0.1:7470</InlineCode> — All{" "}
           <InlineCode>/v1/*</InlineCode> endpoints require{" "}
           <InlineCode>Authorization: Bearer &lt;key&gt;</InlineCode>
         </P>
@@ -369,7 +369,7 @@ user3@gmail.com|password789|My Custom Label`} label="accounts.txt" lang="text" /
         <H3 id="chat-completions">Chat Completions</H3>
         <Endpoint method="POST" path="/v1/chat/completions" />
         <P>OpenAI-compatible chat completions. Always streams. For OpenCode, Hermes, and OpenAI-format tools.</P>
-        <CodeBlock code={`curl http://127.0.0.1:8080/v1/chat/completions \\
+        <CodeBlock code={`curl http://127.0.0.1:7470/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer <your-api-key>" \\
   -d '{
@@ -389,7 +389,7 @@ data: [DONE]`} label="response" lang="text" />
         <H3 id="messages-api">Messages API</H3>
         <Endpoint method="POST" path="/v1/messages" />
         <P>Anthropic Messages format. Hexos translates to OpenAI upstream and converts back. For Claude Code and OpenClaw.</P>
-        <CodeBlock code={`curl http://127.0.0.1:8080/v1/messages \\
+        <CodeBlock code={`curl http://127.0.0.1:7470/v1/messages \\
   -H "Content-Type: application/json" \\
   -H "x-api-key: <your-api-key>" \\
   -H "anthropic-version: 2023-06-01" \\
@@ -414,7 +414,7 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
         {/* List Models */}
         <H3 id="list-models">List Models</H3>
         <Endpoint method="GET" path="/v1/models" />
-        <CodeBlock code={`curl http://127.0.0.1:8080/v1/models -H "Authorization: Bearer <key>"`} label="curl" lang="bash" />
+        <CodeBlock code={`curl http://127.0.0.1:7470/v1/models -H "Authorization: Bearer <key>"`} label="curl" lang="bash" />
         <CodeBlock code={`{
   "object": "list",
   "data": [
@@ -428,14 +428,14 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
         <H3 id="health-check">Health Check</H3>
         <Endpoint method="GET" path="/health" />
         <P>No authentication required.</P>
-        <CodeBlock code={`curl http://127.0.0.1:8080/health`} label="curl" lang="bash" />
+        <CodeBlock code={`curl http://127.0.0.1:7470/health`} label="curl" lang="bash" />
         <CodeBlock code={`{"status":"ok","connections":9,"totalRequests":42,"totalTokens":1250000,"totalCreditCost":125.50}`} label="response" lang="json" />
 
         {/* Usage Stats */}
         <H3 id="usage-stats">Usage Stats</H3>
         <Endpoint method="GET" path="/v1/usage/stats" />
         <P>Aggregate statistics. Optional <InlineCode>?since=</InlineCode> timestamp (ms).</P>
-        <CodeBlock code={`curl "http://127.0.0.1:8080/v1/usage/stats" -H "Authorization: Bearer <key>"`} label="curl" lang="bash" />
+        <CodeBlock code={`curl "http://127.0.0.1:7470/v1/usage/stats" -H "Authorization: Bearer <key>"`} label="curl" lang="bash" />
         <CodeBlock code={`{
   "totalRequests": 42,
   "totalPromptTokens": 1200000,
@@ -455,7 +455,7 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
           Query params: <InlineCode>limit</InlineCode>, <InlineCode>model</InlineCode>,{" "}
           <InlineCode>accountId</InlineCode>, <InlineCode>since</InlineCode>
         </P>
-        <CodeBlock code={`curl "http://127.0.0.1:8080/v1/usage/records?limit=5&model=claude-opus-4.6" \\
+        <CodeBlock code={`curl "http://127.0.0.1:7470/v1/usage/records?limit=5&model=claude-opus-4.6" \\
   -H "Authorization: Bearer <key>"`} label="curl" lang="bash" />
         <CodeBlock code={`[{
   "id": "rec_abc",
@@ -515,7 +515,7 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
 {
   "model": "claude-opus-4.6",
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080/v1",
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:7470/v1",
     "ANTHROPIC_AUTH_TOKEN": "<your-api-key>",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4.6",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4.6",
@@ -533,7 +533,7 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
     "hexos": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "http://127.0.0.1:8080/v1",
+        "baseURL": "http://127.0.0.1:7470/v1",
         "apiKey": "<your-api-key>"
       },
       "models": {
