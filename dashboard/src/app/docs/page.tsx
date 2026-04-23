@@ -44,6 +44,68 @@ function InlineCode({ children }: { children: React.ReactNode }) {
   );
 }
 
+function AvailableModelsTable() {
+  const [models, setModels] = useState<Array<{ id: string; name: string; provider: string; contextWindow: number | null }>>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    import("@/lib/api").then(({ apiFetch }) => {
+      apiFetch<Array<{ id: string; name: string; provider: string; contextWindow: number | null }>>("/api/models")
+        .then((data) => { setModels(data); setLoading(false); })
+        .catch(() => setLoading(false));
+    });
+  }, []);
+
+  if (loading) {
+    return <div className="text-sm text-muted-foreground py-4">Loading models...</div>;
+  }
+
+  if (models.length === 0) {
+    return <div className="text-sm text-muted-foreground py-4">No models available. Start the server first.</div>;
+  }
+
+  // Group by provider prefix
+  const grouped: Record<string, typeof models> = {};
+  for (const m of models) {
+    const prefix = m.id.split("/")[0] || "other";
+    if (!grouped[prefix]) grouped[prefix] = [];
+    grouped[prefix].push(m);
+  }
+
+  const providerLabels: Record<string, string> = { cb: "CodeBuddy", cl: "Cline", kr: "Kiro" };
+
+  return (
+    <div className="space-y-4 mb-6">
+      <div className="text-sm text-muted-foreground">{models.length} models available</div>
+      {Object.entries(grouped).map(([prefix, items]) => (
+        <div key={prefix}>
+          <div className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">{providerLabels[prefix] || prefix} ({items.length})</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-1.5 pr-4 font-medium text-muted-foreground text-xs">Model ID</th>
+                  <th className="text-left py-1.5 pr-4 font-medium text-muted-foreground text-xs">Name</th>
+                  <th className="text-right py-1.5 font-medium text-muted-foreground text-xs">Context</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((m) => (
+                  <tr key={m.id} className="border-b last:border-0">
+                    <td className="py-1.5 pr-4"><InlineCode>{m.id}</InlineCode></td>
+                    <td className="py-1.5 pr-4 text-muted-foreground text-xs">{m.name}</td>
+                    <td className="py-1.5 text-right text-muted-foreground text-xs">{m.contextWindow ? `${(m.contextWindow / 1000).toFixed(0)}K` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Endpoint({ method, path }: { method: string; path: string }) {
   return (
     <div className="flex items-center gap-2 my-2">
@@ -523,11 +585,7 @@ data: {"type":"message_stop"}`} label="response" lang="text" />
         </div>
 
         <H3 id="available-models">Available Models</H3>
-        <div className="flex flex-wrap gap-1.5 mb-6">
-          {["cb/claude-opus-4.6", "cb/claude-haiku-4.5", "cb/gpt-5.4", "cb/gpt-5.2", "cb/gpt-5.1", "cb/gemini-2.5-pro", "cb/gemini-2.5-flash", "cb/gemini-3.1-pro", "cb/gemini-3.0-flash", "cb/kimi-k2.5", "cb/glm-5.0"].map((m) => (
-            <Badge key={m} variant="outline" className="font-mono text-xs">{m}</Badge>
-          ))}
-        </div>
+        <AvailableModelsTable />
 
         <H3 id="claude-code-config">Claude Code Config</H3>
         <P>Claude Code uses Anthropic format — model names <strong>without</strong> <InlineCode>cb/</InlineCode> prefix:</P>

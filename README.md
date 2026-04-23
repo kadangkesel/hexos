@@ -244,14 +244,6 @@ git push origin v0.2.0
 # 4. Updates hexos.kadangkesel.net version file
 ```
 
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HEXOS_HEADLESS` | `true` | Run browser without GUI |
-| `HEXOS_DEBUG` | `false` | Verbose debug logging |
-| `HEXOS_PROXY_URL` | — | Proxy for browser (`socks5://host:port`) |
-
 ## License
 
 MIT
