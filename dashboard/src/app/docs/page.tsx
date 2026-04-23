@@ -73,6 +73,7 @@ const SECTIONS: DocSection[] = [
     icon: <Rocket className="size-4" />,
     headings: [
       { id: "what-is-hexos", title: "What is Hexos?" },
+      { id: "install", title: "Install" },
       { id: "quick-setup", title: "Quick Setup" },
     ],
   },
@@ -85,6 +86,7 @@ const SECTIONS: DocSection[] = [
       { id: "auth-commands", title: "Authentication" },
       { id: "key-commands", title: "API Keys" },
       { id: "usage-commands", title: "Usage" },
+      { id: "system-commands", title: "System" },
     ],
   },
   {
@@ -257,13 +259,26 @@ export default function DocsPage() {
           and automatically fails over when accounts are rate-limited or exhausted.
         </P>
 
+        <H3 id="install">Install</H3>
+        <div className="flex flex-col gap-3 mb-4">
+          <div>
+            <span className="text-sm font-medium text-muted-foreground">Linux / macOS</span>
+            <CodeBlock code="curl -fsSL https://hexos.kadangkesel.net/install | bash" label="terminal" lang="bash" />
+          </div>
+          <div>
+            <span className="text-sm font-medium text-muted-foreground">Windows (PowerShell)</span>
+            <CodeBlock code="irm https://hexos.kadangkesel.net/install.ps1 | iex" label="powershell" lang="powershell" />
+          </div>
+        </div>
+
         <H3 id="quick-setup">Quick Setup</H3>
         <div className="flex flex-col gap-3 mb-6">
           {[
-            { step: "1", title: "Install & start", code: "bun link && hexos start" },
+            { step: "1", title: "Start server", code: "hexos start" },
             { step: "2", title: "Create API key", code: "hexos key create" },
             { step: "3", title: "Add accounts", code: "hexos auth batch-connect --file accounts.txt" },
-            { step: "4", title: "Configure tool", desc: "Go to Integration page to auto-bind, or set proxy URL and API key manually." },
+            { step: "4", title: "Open dashboard", desc: "Visit http://localhost:7470 — dashboard is built-in." },
+            { step: "5", title: "Configure tool", desc: "Go to Integration page to auto-bind, or set proxy URL and API key manually." },
           ].map((s) => (
             <div key={s.step} className="flex gap-3">
               <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold mt-0.5">
@@ -315,6 +330,13 @@ export default function DocsPage() {
               ["hexos usage stats --today", "Today only"],
               ["hexos usage log", "Recent records"],
               ["hexos usage log -n 100 --model claude-opus-4.6", "Filtered log"],
+            ],
+          },
+          {
+            id: "system-commands", title: "System", cmds: [
+              ["hexos update", "Update to latest version"],
+              ["hexos uninstall", "Uninstall hexos (preserves data)"],
+              ["hexos --version", "Show current version"],
             ],
           },
         ].map((group) => (
