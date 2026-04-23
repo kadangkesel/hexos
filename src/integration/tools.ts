@@ -486,16 +486,12 @@ const handlers: Record<string, ToolHandler> = {
         modelsList = buildAllModelsList();
       }
 
-      // Build per-model context_length map for custom_providers
-      const modelsConfig: Record<string, { context_length: number }> = {};
-      for (const m of modelsList) {
-        const catalogEntry = MODEL_CATALOG[m.id];
-        modelsConfig[m.id] = { context_length: catalogEntry?.info.contextWindow ?? 200000 };
-      }
-
       // Default model context window (for compression threshold)
       const defaultModelEntry = MODEL_CATALOG[defaultModel];
       const defaultContextLength = defaultModelEntry?.info.contextWindow ?? 200000;
+
+      // Build models list for providers section (Hermes model picker reads this)
+      const modelsIdList = modelsList.map((m) => m.id);
 
       return {
         model: {
@@ -505,33 +501,43 @@ const handlers: Record<string, ToolHandler> = {
           api_key: apiKey,
           context_length: defaultContextLength,
         },
-        custom_providers: [
-          {
-            name: "hexos",
+        // Write to providers section (dict format) — Hermes model picker Section 3
+        // reads providers.<name>.models as a list of model IDs
+        providers: {
+          hexos: {
+            name: "Hexos",
             base_url: `${baseUrl}/v1`,
             api_key: apiKey,
-            models: modelsConfig,
+            models: modelsIdList,
           },
-        ],
+        },
       };
     },
     isBound(config) {
-      // Check both model.base_url and custom_providers
+      // Check model.base_url
       const url = config?.model?.base_url;
       if (typeof url === "string" && (url.includes("127.0.0.1") || url.includes("localhost"))) return true;
-      const providers = config?.custom_providers;
-      if (Array.isArray(providers)) {
-        return providers.some((p: any) => p.name === "hexos");
+      // Check providers.hexos
+      const providers = config?.providers;
+      if (providers && typeof providers === "object" && providers.hexos) return true;
+      // Legacy: check custom_providers
+      const customProviders = config?.custom_providers;
+      if (Array.isArray(customProviders)) {
+        return customProviders.some((p: any) => p.name === "hexos");
       }
       return false;
     },
     merge(existing, fragment) {
       const merged = deepMerge(existing ?? {}, fragment);
-      // custom_providers is an array — replace, don't deep merge
-      if (fragment.custom_providers) {
-        // Remove existing hexos entry, then add new one
-        const existing_providers = Array.isArray(existing?.custom_providers) ? existing.custom_providers.filter((p: any) => p.name !== "hexos") : [];
-        merged.custom_providers = [...existing_providers, ...fragment.custom_providers];
+      // providers is a dict — deepMerge handles it, but ensure hexos entry is fully replaced
+      if (fragment.providers?.hexos) {
+        if (!merged.providers || typeof merged.providers !== "object") merged.providers = {};
+        merged.providers.hexos = fragment.providers.hexos;
+      }
+      // Clean up legacy custom_providers hexos entries
+      if (Array.isArray(merged.custom_providers)) {
+        merged.custom_providers = merged.custom_providers.filter((p: any) => p.name !== "hexos");
+        if (merged.custom_providers.length === 0) delete merged.custom_providers;
       }
       return merged;
     },
@@ -543,9 +549,15 @@ const handlers: Record<string, ToolHandler> = {
         cleaned.model = { ...cleaned.model };
         delete cleaned.model.base_url;
         delete cleaned.model.api_key;
+        delete cleaned.model.context_length;
         if (cleaned.model.provider === "custom") delete cleaned.model.provider;
       }
-      // Remove hexos from custom_providers
+      // Remove hexos from providers
+      if (cleaned.providers && typeof cleaned.providers === "object") {
+        delete cleaned.providers.hexos;
+        if (Object.keys(cleaned.providers).length === 0) cleaned.providers = {};
+      }
+      // Legacy: remove hexos from custom_providers
       if (Array.isArray(cleaned.custom_providers)) {
         cleaned.custom_providers = cleaned.custom_providers.filter((p: any) => p.name !== "hexos");
         if (cleaned.custom_providers.length === 0) delete cleaned.custom_providers;
