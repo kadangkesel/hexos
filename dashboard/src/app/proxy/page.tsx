@@ -398,6 +398,7 @@ export default function ProxyPage() {
                     below.
                   </p>
                 ) : (
+                  <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -472,6 +473,7 @@ export default function ProxyPage() {
                       ))}
                     </TableBody>
                   </Table>
+                  </div>
                 )}
               </CardContent>
             </Card>

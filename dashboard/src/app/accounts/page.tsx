@@ -619,7 +619,7 @@ function FilterUnconnectedSection() {
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Provider selector */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center flex-wrap gap-3">
             <Label className="text-xs text-muted-foreground shrink-0">Provider:</Label>
             <div className="flex gap-1.5">
               {(["codebuddy", "cline", "kiro"] as string[]).map((p) => (
@@ -1115,6 +1115,7 @@ export default function AccountsPage() {
               </Select>
             </div>
 
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1156,10 +1157,11 @@ export default function AccountsPage() {
                 )}
               </TableBody>
             </Table>
+            </div>
 
             {/* ---- Pagination Controls ---- */}
             {pagination.totalPages > 0 && (
-              <div className="flex items-center justify-between pt-4 border-t border-border mt-4">
+              <div className="flex items-center justify-between flex-wrap gap-2 pt-4 border-t border-border mt-4">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>Rows per page:</span>
                   <Select value={String(pagination.limit)} onValueChange={(v: string | null) => handleLimitChange(Number(v ?? 20))}>

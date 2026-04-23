@@ -150,7 +150,7 @@ function UsageByAccountCard({ data, loading }: { data: Array<Record<string, unkn
           </div>
         </CardHeader>
         <CardContent>
-          <div className={cn("overflow-hidden", expanded && "overflow-auto max-h-[500px]")}>
+          <div className={cn("overflow-x-auto", expanded && "overflow-auto max-h-[500px]")}>
             <Table>
               <TableHeader className={cn(expanded && "sticky top-0 z-10 bg-card")}>
                 <TableRow>
@@ -509,7 +509,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Token breakdown */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <p className="text-xs text-muted-foreground font-medium">Total</p>
                 <p className="text-2xl font-bold tracking-tight mt-0.5">
@@ -650,6 +650,7 @@ export default function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent>
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -699,6 +700,7 @@ export default function DashboardPage() {
                   )}
                 </TableBody>
               </Table>
+              </div>
             </CardContent>
           </Card>
         </motion.div>
