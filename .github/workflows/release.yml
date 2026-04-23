@@ -183,18 +183,4 @@ jobs:
 
             Dashboard: http://localhost:7470
 
-      # Update VPS version file (optional — requires VPS_SSH_KEY secret)
-      - name: Update VPS version
-        if: env.VPS_SSH_KEY != ''
-        env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            echo "${{ steps.version.outputs.version }}" > /var/www/hexos/version
-            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/master/install.sh" -o /var/www/hexos/install.sh
-            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/master/install.ps1" -o /var/www/hexos/install.ps1
-            echo "Updated hexos.kadangkesel.net to v${{ steps.version.outputs.version }}"
+      # VPS version update handled by cron job on VPS (checks GitHub API every 5 min)
