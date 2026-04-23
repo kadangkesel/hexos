@@ -37,6 +37,7 @@ docs/cline-account-api.md
 docs/kiro-api.md
 docs/kiro-cli-api.md
 docs/windsurf-reverse-engineering.md
+docs/qoder-reverse-engineering.md
 
 # Assistant/AI config
 .claude/
