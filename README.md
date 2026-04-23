@@ -1,8 +1,10 @@
 # Hexos — Multi-Provider AI API Proxy
 
-Multi-provider AI API proxy with multi-account management, browser automation, and a built-in dashboard. Routes requests through CodeBuddy, Cline, and Kiro to access Claude, GPT, Gemini, DeepSeek, and more — all via a single OpenAI-compatible endpoint.
+Multi-provider AI API proxy with multi-account management, browser automation, and a built-in dashboard. Routes requests through CodeBuddy, Cline, and Kiro to access Assistant, GPT, Gemini, DeepSeek, and more — all via a single OpenAI-compatible endpoint.
 
 Built with [Bun](https://bun.sh) + [Hono](https://hono.dev) + [lowdb](https://github.com/typicode/lowdb). Dashboard with [Next.js 16](https://nextjs.org) + [Tailwind v4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com).
+
+![Hexos Dashboard](docs/preview.png)
 
 ## Install
 
