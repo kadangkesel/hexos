@@ -40,11 +40,11 @@ export default function RootLayout({
         <ThemeProvider>
           <SidebarProvider>
             <AppSidebar />
-            <SidebarInset className="min-w-0 overflow-hidden">
+            <SidebarInset className="min-w-0">
               <div className="sticky top-0 z-10 bg-background">
                 <Navbar />
               </div>
-              <div className="flex-1 overflow-auto p-4 lg:p-6">
+              <div className="flex-1 overflow-auto overflow-x-hidden p-4 lg:p-6">
                 {children}
               </div>
             </SidebarInset>
