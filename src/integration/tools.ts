@@ -486,13 +486,16 @@ const handlers: Record<string, ToolHandler> = {
         modelsList = buildAllModelsList();
       }
 
-      // Build one custom_providers entry per model (Hermes expects this format)
-      const customProviders = modelsList.map((m) => ({
-        name: "hexos",
-        base_url: `${baseUrl}/v1`,
-        api_key: apiKey,
-        model: m.id,
-      }));
+      // Build per-model context_length map for custom_providers
+      const modelsConfig: Record<string, { context_length: number }> = {};
+      for (const m of modelsList) {
+        const catalogEntry = MODEL_CATALOG[m.id];
+        modelsConfig[m.id] = { context_length: catalogEntry?.info.contextWindow ?? 200000 };
+      }
+
+      // Default model context window (for compression threshold)
+      const defaultModelEntry = MODEL_CATALOG[defaultModel];
+      const defaultContextLength = defaultModelEntry?.info.contextWindow ?? 200000;
 
       return {
         model: {
@@ -500,8 +503,16 @@ const handlers: Record<string, ToolHandler> = {
           default: defaultModel,
           base_url: `${baseUrl}/v1`,
           api_key: apiKey,
+          context_length: defaultContextLength,
         },
-        custom_providers: customProviders,
+        custom_providers: [
+          {
+            name: "hexos",
+            base_url: `${baseUrl}/v1`,
+            api_key: apiKey,
+            models: modelsConfig,
+          },
+        ],
       };
     },
     isBound(config) {
