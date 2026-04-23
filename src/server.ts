@@ -1084,7 +1084,7 @@ export function createApp() {
   // --- System info ---
   app.get("/api/system", (c) => {
     return c.json({
-      version: "0.1.0",
+      version: "0.1.1",
       runtime: "bun",
       automationReady: isAutomationReady(),
       providers: Object.values(PROVIDERS).map((p) => ({
