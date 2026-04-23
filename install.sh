@@ -6,6 +6,7 @@
 #   HEXOS_VERSION   - Specific version to install (default: latest)
 #   HEXOS_DIR       - Installation directory (default: ~/.hexos)
 #   HEXOS_NO_MODIFY_PATH - Set to 1 to skip PATH modification
+#   HEXOS_NO_SERVICE - Set to 1 to skip service/daemon setup
 #   GITHUB_REPO     - GitHub repository (default: kadangkesel/hexos)
 
 set -euo pipefail
@@ -173,6 +174,118 @@ setup_path() {
   fi
 }
 
+# Setup systemd service (Linux)
+setup_systemd() {
+  if [ "${HEXOS_NO_SERVICE:-0}" = "1" ]; then
+    return
+  fi
+
+  # Only on Linux with systemd
+  if [ "$(uname -s)" != "Linux" ]; then
+    return
+  fi
+
+  if ! command -v systemctl &>/dev/null; then
+    warn "systemd not found — skipping service setup"
+    return
+  fi
+
+  local service_dir="$HOME/.config/systemd/user"
+  local service_file="$service_dir/hexos.service"
+
+  mkdir -p "$service_dir"
+
+  cat > "$service_file" << EOF
+[Unit]
+Description=Hexos AI API Proxy
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$BIN_DIR/hexos start
+Restart=on-failure
+RestartSec=5
+Environment=HOME=$HOME
+
+[Install]
+WantedBy=default.target
+EOF
+
+  # Enable lingering so user services run without login
+  if command -v loginctl &>/dev/null; then
+    loginctl enable-linger "$(whoami)" 2>/dev/null || true
+  fi
+
+  # Reload and enable
+  systemctl --user daemon-reload 2>/dev/null || true
+  systemctl --user enable hexos.service 2>/dev/null || true
+  systemctl --user restart hexos.service 2>/dev/null || true
+
+  ok "Service installed (systemd user service)"
+  info "  Status:  systemctl --user status hexos"
+  info "  Logs:    journalctl --user -u hexos -f"
+  info "  Stop:    systemctl --user stop hexos"
+  info "  Disable: systemctl --user disable hexos"
+}
+
+# Setup launchd plist (macOS)
+setup_launchd() {
+  if [ "${HEXOS_NO_SERVICE:-0}" = "1" ]; then
+    return
+  fi
+
+  # Only on macOS
+  if [ "$(uname -s)" != "Darwin" ]; then
+    return
+  fi
+
+  local plist_dir="$HOME/Library/LaunchAgents"
+  local plist_file="$plist_dir/net.kadangkesel.hexos.plist"
+
+  mkdir -p "$plist_dir"
+
+  cat > "$plist_file" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>net.kadangkesel.hexos</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$BIN_DIR/hexos</string>
+    <string>start</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$HEXOS_DIR/hexos.log</string>
+  <key>StandardErrorPath</key>
+  <string>$HEXOS_DIR/hexos.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>$HOME</string>
+  </dict>
+</dict>
+</plist>
+EOF
+
+  # Load the service
+  launchctl unload "$plist_file" 2>/dev/null || true
+  launchctl load -w "$plist_file" 2>/dev/null || true
+
+  ok "Service installed (launchd)"
+  info "  Status:  launchctl list | grep hexos"
+  info "  Logs:    tail -f $HEXOS_DIR/hexos.log"
+  info "  Stop:    launchctl unload $plist_file"
+}
+
 main() {
   local start_time=$(date +%s)
 
@@ -272,6 +385,11 @@ main() {
   ok "Installed to: $BIN_DIR/hexos"
   ok "Entry point: $LINK_DIR/hexos"
 
+  # Setup daemon/service
+  info "Setting up service..."
+  setup_systemd
+  setup_launchd
+
   # Calculate elapsed time
   local end_time=$(date +%s)
   local elapsed=$((end_time - start_time))
@@ -279,13 +397,22 @@ main() {
   echo ""
   ok "Successfully installed hexos $version! (${elapsed}s)"
   echo ""
-  echo -e "  ${BOLD}Quick start:${NC}"
-  echo -e "    ${CYAN}hexos start${NC}              Start the proxy server"
-  echo -e "    ${CYAN}hexos key create${NC}         Generate an API key"
-  echo -e "    ${CYAN}hexos auth connect${NC}       Add a provider account"
+  echo -e "  ${BOLD}Service:${NC}"
+  if [ "$os" = "linux" ]; then
+    echo -e "    Hexos is running as a systemd user service (auto-starts on boot)"
+    echo -e "    ${CYAN}systemctl --user status hexos${NC}    Check status"
+    echo -e "    ${CYAN}journalctl --user -u hexos -f${NC}   View logs"
+  elif [ "$os" = "darwin" ]; then
+    echo -e "    Hexos is running as a launchd agent (auto-starts on login)"
+    echo -e "    ${CYAN}tail -f ~/.hexos/hexos.log${NC}      View logs"
+  fi
   echo ""
   echo -e "  ${BOLD}Dashboard:${NC}"
-  echo -e "    Open ${CYAN}http://localhost:7470${NC} after starting the server"
+  echo -e "    Open ${CYAN}http://localhost:7470${NC}"
+  echo ""
+  echo -e "  ${BOLD}Quick start:${NC}"
+  echo -e "    ${CYAN}hexos key create${NC}         Generate an API key"
+  echo -e "    ${CYAN}hexos auth connect${NC}       Add a provider account"
   echo ""
   echo -e "  ${BOLD}Browser automation (optional):${NC}"
   echo -e "    ${CYAN}hexos auth setup-automation${NC}   Install Python + Camoufox"

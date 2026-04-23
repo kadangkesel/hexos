@@ -439,6 +439,114 @@ key
     for (const k of keys) console.log(`  ${chalk.cyan(k)}`);
   });
 
+// Service management commands
+const service = program.command("service").description("Manage hexos background service");
+
+service
+  .command("status")
+  .description("Check if hexos service is running")
+  .action(async () => {
+    const isWindows = process.platform === "win32";
+    const isMac = process.platform === "darwin";
+
+    if (isWindows) {
+      const proc = Bun.spawnSync(["powershell", "-Command", "Get-ScheduledTask -TaskName Hexos -ErrorAction SilentlyContinue | Format-Table TaskName,State -AutoSize"], { stdio: ["inherit", "inherit", "inherit"] });
+      if (proc.exitCode !== 0) log.warn("Hexos task not found. Run installer to set up.");
+    } else if (isMac) {
+      const proc = Bun.spawnSync(["launchctl", "list"], { stdout: "pipe" });
+      const output = new TextDecoder().decode(proc.stdout);
+      const hexosLine = output.split("\n").find(l => l.includes("hexos"));
+      if (hexosLine) {
+        console.log(chalk.green("  Hexos service is loaded"));
+        console.log(`  ${hexosLine}`);
+      } else {
+        log.warn("Hexos service not found. Run installer to set up.");
+      }
+    } else {
+      const proc = Bun.spawnSync(["systemctl", "--user", "status", "hexos"], { stdio: ["inherit", "inherit", "inherit"] });
+      if (proc.exitCode !== 0 && proc.exitCode !== 3) {
+        log.warn("Hexos service not found. Run installer to set up.");
+      }
+    }
+  });
+
+service
+  .command("start")
+  .description("Start hexos background service")
+  .action(async () => {
+    const isWindows = process.platform === "win32";
+    const isMac = process.platform === "darwin";
+
+    if (isWindows) {
+      Bun.spawnSync(["powershell", "-Command", "Start-ScheduledTask -TaskName Hexos"], { stdio: ["inherit", "inherit", "inherit"] });
+    } else if (isMac) {
+      const plist = join(homedir(), "Library", "LaunchAgents", "net.kadangkesel.hexos.plist");
+      Bun.spawnSync(["launchctl", "load", "-w", plist], { stdio: ["inherit", "inherit", "inherit"] });
+    } else {
+      Bun.spawnSync(["systemctl", "--user", "start", "hexos"], { stdio: ["inherit", "inherit", "inherit"] });
+    }
+    log.ok("Service started");
+  });
+
+service
+  .command("stop")
+  .description("Stop hexos background service")
+  .action(async () => {
+    const isWindows = process.platform === "win32";
+    const isMac = process.platform === "darwin";
+
+    if (isWindows) {
+      Bun.spawnSync(["powershell", "-Command", "Stop-ScheduledTask -TaskName Hexos"], { stdio: ["inherit", "inherit", "inherit"] });
+    } else if (isMac) {
+      const plist = join(homedir(), "Library", "LaunchAgents", "net.kadangkesel.hexos.plist");
+      Bun.spawnSync(["launchctl", "unload", plist], { stdio: ["inherit", "inherit", "inherit"] });
+    } else {
+      Bun.spawnSync(["systemctl", "--user", "stop", "hexos"], { stdio: ["inherit", "inherit", "inherit"] });
+    }
+    log.ok("Service stopped");
+  });
+
+service
+  .command("restart")
+  .description("Restart hexos background service")
+  .action(async () => {
+    const isWindows = process.platform === "win32";
+    const isMac = process.platform === "darwin";
+
+    if (isWindows) {
+      Bun.spawnSync(["powershell", "-Command", "Stop-ScheduledTask -TaskName Hexos; Start-ScheduledTask -TaskName Hexos"], { stdio: ["inherit", "inherit", "inherit"] });
+    } else if (isMac) {
+      const plist = join(homedir(), "Library", "LaunchAgents", "net.kadangkesel.hexos.plist");
+      Bun.spawnSync(["launchctl", "unload", plist], { stdio: ["inherit", "inherit", "inherit"] });
+      Bun.spawnSync(["launchctl", "load", "-w", plist], { stdio: ["inherit", "inherit", "inherit"] });
+    } else {
+      Bun.spawnSync(["systemctl", "--user", "restart", "hexos"], { stdio: ["inherit", "inherit", "inherit"] });
+    }
+    log.ok("Service restarted");
+  });
+
+service
+  .command("logs")
+  .description("View hexos service logs")
+  .action(async () => {
+    const isWindows = process.platform === "win32";
+    const isMac = process.platform === "darwin";
+
+    if (isWindows) {
+      log.info("Windows Task Scheduler doesn't capture logs by default.");
+      log.info("Use 'hexos start' in a terminal to see output.");
+    } else if (isMac) {
+      const logFile = join(homedir(), ".hexos", "hexos.log");
+      if (existsSync(logFile)) {
+        Bun.spawnSync(["tail", "-f", logFile], { stdio: ["inherit", "inherit", "inherit"] });
+      } else {
+        log.warn(`Log file not found: ${logFile}`);
+      }
+    } else {
+      Bun.spawnSync(["journalctl", "--user", "-u", "hexos", "-f", "--no-pager"], { stdio: ["inherit", "inherit", "inherit"] });
+    }
+  });
+
 // Update command
 program
   .command("update")

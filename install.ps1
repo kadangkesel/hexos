@@ -160,19 +160,44 @@ function Main {
         $pathAdded = Add-ToPath $BinDir
         Write-Ok "Installed to: $BinDir\hexos.exe"
 
+        # Setup Windows startup task
+        Write-Info "Setting up startup task..."
+        $hexosExe = Join-Path $BinDir "hexos.exe"
+        try {
+            # Remove old task if exists
+            Unregister-ScheduledTask -TaskName "Hexos" -Confirm:$false -ErrorAction SilentlyContinue
+
+            $action = New-ScheduledTaskAction -Execute $hexosExe -Argument "start"
+            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+            Register-ScheduledTask -TaskName "Hexos" -Action $action -Trigger $trigger -Settings $settings -Description "Hexos AI API Proxy" -RunLevel Limited | Out-Null
+
+            # Start it now
+            Start-ScheduledTask -TaskName "Hexos" -ErrorAction SilentlyContinue
+            Write-Ok "Startup task created (runs at login, auto-restarts on failure)"
+        }
+        catch {
+            Write-Warn "Could not create startup task: $_"
+            Write-Warn "You can start manually: hexos start"
+        }
+
         # Calculate elapsed time
         $elapsed = [math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
 
         Write-Host ""
         Write-Ok "Successfully installed hexos $version! (${elapsed}s)"
         Write-Host ""
-        Write-Host "  Quick start:" -ForegroundColor White
-        Write-Host "    hexos start              " -ForegroundColor Cyan -NoNewline; Write-Host "Start the proxy server"
-        Write-Host "    hexos key create         " -ForegroundColor Cyan -NoNewline; Write-Host "Generate an API key"
-        Write-Host "    hexos auth connect       " -ForegroundColor Cyan -NoNewline; Write-Host "Add a provider account"
+        Write-Host "  Service:" -ForegroundColor White
+        Write-Host "    Hexos is running and will auto-start at login"
+        Write-Host "    Get-ScheduledTask Hexos  " -ForegroundColor Cyan -NoNewline; Write-Host "Check status"
+        Write-Host "    Stop-ScheduledTask Hexos " -ForegroundColor Cyan -NoNewline; Write-Host "Stop service"
         Write-Host ""
         Write-Host "  Dashboard:" -ForegroundColor White
-        Write-Host "    Open " -NoNewline; Write-Host "http://localhost:7470" -ForegroundColor Cyan -NoNewline; Write-Host " after starting the server"
+        Write-Host "    Open " -NoNewline; Write-Host "http://localhost:7470" -ForegroundColor Cyan -NoNewline; Write-Host ""
+        Write-Host ""
+        Write-Host "  Quick start:" -ForegroundColor White
+        Write-Host "    hexos key create         " -ForegroundColor Cyan -NoNewline; Write-Host "Generate an API key"
+        Write-Host "    hexos auth connect       " -ForegroundColor Cyan -NoNewline; Write-Host "Add a provider account"
         Write-Host ""
         Write-Host "  Browser automation (optional):" -ForegroundColor White
         Write-Host "    hexos auth setup-automation" -ForegroundColor Cyan -NoNewline; Write-Host "   Install Python + Camoufox"
