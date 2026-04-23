@@ -1,5 +1,10 @@
+// In production (static export served by hexos server), use same origin.
+// In dev mode, use the separate API server URL.
 export const BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:7470";
+  process.env.NEXT_PUBLIC_API_URL ??
+  (typeof window !== "undefined" && window.location.port !== "7471"
+    ? "" // Same origin — served by hexos server
+    : "http://127.0.0.1:7470");
 
 export class ApiError extends Error {
   constructor(

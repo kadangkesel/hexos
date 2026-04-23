@@ -1,0 +1,197 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            bun-target: bun-linux-x64
+            binary-name: hexos
+            archive-ext: tar.gz
+            archive-name-os: linux
+            archive-name-arch: amd64
+          - os: ubuntu-latest
+            target: linux-arm64
+            bun-target: bun-linux-arm64
+            binary-name: hexos
+            archive-ext: tar.gz
+            archive-name-os: linux
+            archive-name-arch: arm64
+          - os: macos-latest
+            target: darwin-arm64
+            bun-target: bun-darwin-arm64
+            binary-name: hexos
+            archive-ext: tar.gz
+            archive-name-os: darwin
+            archive-name-arch: arm64
+          - os: macos-13
+            target: darwin-x64
+            bun-target: bun-darwin-x64
+            binary-name: hexos
+            archive-ext: tar.gz
+            archive-name-os: darwin
+            archive-name-arch: amd64
+          - os: windows-latest
+            target: windows-x64
+            bun-target: bun-windows-x64
+            binary-name: hexos.exe
+            archive-ext: zip
+            archive-name-os: windows
+            archive-name-arch: amd64
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Install root dependencies
+      - name: Install server dependencies
+        run: bun install
+
+      # Install dashboard dependencies
+      - name: Install dashboard dependencies
+        run: bun install
+        working-directory: dashboard
+
+      # Build dashboard (static export)
+      - name: Build dashboard
+        run: bun run next build
+        working-directory: dashboard
+        env:
+          NEXT_STATIC_EXPORT: "true"
+
+      # Compile server binary
+      - name: Compile server binary
+        run: |
+          mkdir -p dist/${{ matrix.target }}
+          bun build src/index.ts --compile --target ${{ matrix.bun-target }} --outfile dist/${{ matrix.target }}/${{ matrix.binary-name }}
+
+      # Copy dashboard files
+      - name: Copy dashboard files
+        run: |
+          cp -r dashboard/out dist/${{ matrix.target }}/dashboard
+        shell: bash
+
+      # Copy automation files
+      - name: Copy automation files
+        run: |
+          mkdir -p dist/${{ matrix.target }}/automation
+          cp src/automation/login.py dist/${{ matrix.target }}/automation/ || true
+          cp src/automation/cline_login.py dist/${{ matrix.target }}/automation/ || true
+          cp src/automation/kiro_login.py dist/${{ matrix.target }}/automation/ || true
+          cp src/automation/setup.py dist/${{ matrix.target }}/automation/ || true
+          cp src/automation/requirements.txt dist/${{ matrix.target }}/automation/ || true
+        shell: bash
+
+      # Get version from tag
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # Create archive (tar.gz for Unix, zip for Windows)
+      - name: Create archive (Unix)
+        if: matrix.archive-ext == 'tar.gz'
+        run: |
+          cd dist/${{ matrix.target }}
+          tar czf ../hexos-${{ steps.version.outputs.version }}-${{ matrix.archive-name-os }}-${{ matrix.archive-name-arch }}.tar.gz .
+
+      - name: Create archive (Windows)
+        if: matrix.archive-ext == 'zip'
+        run: |
+          cd dist/${{ matrix.target }}
+          Compress-Archive -Path * -DestinationPath ../hexos-${{ steps.version.outputs.version }}-${{ matrix.archive-name-os }}-${{ matrix.archive-name-arch }}.zip
+        shell: pwsh
+
+      # Upload artifact
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hexos-${{ matrix.target }}
+          path: dist/hexos-${{ steps.version.outputs.version }}-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Create Release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      # Download all artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Generate checksums
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum hexos-* > hexos-${{ steps.version.outputs.version }}-checksums.txt
+          cat hexos-${{ steps.version.outputs.version }}-checksums.txt
+
+      # Create GitHub Release
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Hexos v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/hexos-*
+          body: |
+            ## Installation
+
+            **Linux / macOS:**
+            ```bash
+            curl -fsSL https://hexos.kadangkesel.net/install | bash
+            ```
+
+            **Windows (PowerShell):**
+            ```powershell
+            irm https://hexos.kadangkesel.net/install.ps1 | iex
+            ```
+
+            ## Quick Start
+            ```bash
+            hexos start           # Start the proxy server
+            hexos key create      # Generate an API key
+            hexos auth connect    # Add a provider account
+            ```
+
+            Dashboard: http://localhost:7470
+
+      # Update VPS version file (optional — requires VPS_SSH_KEY secret)
+      - name: Update VPS version
+        if: ${{ secrets.VPS_SSH_KEY != '' }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "${{ steps.version.outputs.version }}" > /var/www/hexos/version
+            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh" -o /var/www/hexos/install.sh
+            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1" -o /var/www/hexos/install.ps1
+            echo "Updated hexos.kadangkesel.net to v${{ steps.version.outputs.version }}"

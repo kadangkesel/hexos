@@ -2,6 +2,8 @@ import { saveConnection } from "./store.ts";
 import { log } from "../utils/logger.ts";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { homedir } from "os";
+import { existsSync } from "fs";
 
 const CODEBUDDY_HEADERS = {
   "Content-Type": "application/json",
@@ -9,9 +11,14 @@ const CODEBUDDY_HEADERS = {
   "User-Agent": "codebuddy/2.91.0",
 };
 
-// Resolve automation directory relative to this file
+// Resolve automation directory: check ~/.hexos/automation/ first (installed mode),
+// then fall back to source tree (dev mode)
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const AUTOMATION_DIR = join(__dirname, "..", "automation");
+const INSTALLED_AUTOMATION_DIR = join(homedir(), ".hexos", "automation");
+const SOURCE_AUTOMATION_DIR = join(__dirname, "..", "automation");
+const AUTOMATION_DIR = existsSync(join(INSTALLED_AUTOMATION_DIR, "login.py"))
+  ? INSTALLED_AUTOMATION_DIR
+  : SOURCE_AUTOMATION_DIR;
 const VENV_PYTHON = process.platform === "win32"
   ? join(AUTOMATION_DIR, ".venv", "Scripts", "python.exe")
   : join(AUTOMATION_DIR, ".venv", "bin", "python");

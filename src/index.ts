@@ -13,6 +13,8 @@ import { createApiKey, getApiKeys, listConnections, removeConnection, updateConn
 import { log } from "./utils/logger.ts";
 import chalk from "chalk";
 import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 
 const program = new Command();
 
@@ -32,13 +34,21 @@ program
     const port = parseInt(opts.port);
     const keys = getApiKeys();
 
-    log.ok(`Hexos proxy starting on ${chalk.cyan(`http://${opts.host}:${port}`)}`);
+    const baseUrl = `http://${opts.host}:${port}`;
+    log.ok(`Hexos proxy starting on ${chalk.cyan(baseUrl)}`);
     if (keys.length === 0) {
       log.warn("No API keys configured — running in open mode. Run: hexos key create");
     } else {
       log.info(`API keys: ${keys.length} configured`);
     }
     log.info(`Connections: ${listConnections().length} active`);
+
+    const dashboardDir = join(homedir(), ".hexos", "dashboard");
+    if (existsSync(dashboardDir)) {
+      log.ok(`Dashboard: ${chalk.cyan(baseUrl)}`);
+    } else {
+      log.info(`Dashboard: not installed (run separately with 'cd dashboard && bun dev')`);
+    }
 
     Bun.serve({ fetch: app.fetch, port, hostname: opts.host });
   });
@@ -427,6 +437,92 @@ key
     }
     console.log(chalk.bold("\nAPI Keys:"));
     for (const k of keys) console.log(`  ${chalk.cyan(k)}`);
+  });
+
+// Update command
+program
+  .command("update")
+  .description("Update hexos to the latest version")
+  .action(async () => {
+    log.info("Checking for updates...");
+
+    const isWindows = process.platform === "win32";
+    if (isWindows) {
+      log.info("Run the following command to update:");
+      console.log(chalk.cyan("  irm https://hexos.kadangkesel.net/install.ps1 | iex"));
+    } else {
+      log.info("Updating via installer...");
+      const proc = Bun.spawn(["bash", "-c", "curl -fsSL https://hexos.kadangkesel.net/install | bash"], {
+        stdio: ["inherit", "inherit", "inherit"],
+      });
+      await proc.exited;
+    }
+  });
+
+// Uninstall command
+program
+  .command("uninstall")
+  .description("Uninstall hexos")
+  .action(async () => {
+    const hexosDir = join(homedir(), ".hexos");
+    const linkPath = process.platform === "win32"
+      ? join(hexosDir, "bin", "hexos.exe")
+      : join(homedir(), ".local", "bin", "hexos");
+
+    console.log(chalk.bold("\nThis will remove:"));
+    console.log(`  ${chalk.red(join(hexosDir, "bin"))}  (binary)`);
+    console.log(`  ${chalk.red(join(hexosDir, "dashboard"))}  (dashboard files)`);
+    console.log(`  ${chalk.red(join(hexosDir, "automation"))}  (automation scripts)`);
+    if (!process.platform.startsWith("win")) {
+      console.log(`  ${chalk.red(linkPath)}  (symlink)`);
+    }
+    console.log("");
+    console.log(chalk.yellow("  Note: ~/.hexos/db.json and ~/.hexos/usage.json will NOT be removed."));
+    console.log("");
+
+    // Simple confirmation via stdin
+    process.stdout.write("  Continue? [y/N] ");
+    const reader = Bun.stdin.stream().getReader();
+    const { value } = await reader.read();
+    reader.releaseLock();
+    const answer = new TextDecoder().decode(value).trim().toLowerCase();
+
+    if (answer !== "y" && answer !== "yes") {
+      log.info("Cancelled.");
+      return;
+    }
+
+    const { rmSync } = await import("fs");
+
+    // Remove binary
+    const binDir = join(hexosDir, "bin");
+    if (existsSync(binDir)) {
+      rmSync(binDir, { recursive: true });
+      log.ok("Removed binary");
+    }
+
+    // Remove dashboard
+    const dashDir = join(hexosDir, "dashboard");
+    if (existsSync(dashDir)) {
+      rmSync(dashDir, { recursive: true });
+      log.ok("Removed dashboard");
+    }
+
+    // Remove automation (but keep .venv if user wants)
+    const autoDir = join(hexosDir, "automation");
+    if (existsSync(autoDir)) {
+      rmSync(autoDir, { recursive: true });
+      log.ok("Removed automation scripts");
+    }
+
+    // Remove symlink
+    if (!process.platform.startsWith("win") && existsSync(linkPath)) {
+      rmSync(linkPath);
+      log.ok("Removed symlink");
+    }
+
+    log.ok("Hexos uninstalled. Data files preserved at ~/.hexos/");
+    log.info("To fully remove all data: rm -rf ~/.hexos");
   });
 
 program.parse();

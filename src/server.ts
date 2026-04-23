@@ -12,8 +12,9 @@ import { PROVIDERS } from "./config/providers.ts";
 import { detectTools, bindTool, unbindTool, readToolConfig } from "./integration/tools.ts";
 import { getProxies, addProxy, batchAddProxies, removeProxy, removeDeadProxies, removeAllProxies, checkProxy, checkAllProxies } from "./proxy/pool.ts";
 import { getSources, getScrapeStatus, startScrape, cancelScrape, integrateResults } from "./proxy/scraper.ts";
-import { join } from "path";
+import { join, extname } from "path";
 import { homedir } from "os";
+import { existsSync } from "fs";
 
 // Track batch connect tasks
 interface BatchTaskLog {
@@ -1094,11 +1095,80 @@ export function createApp() {
     });
   });
 
-  // Catch-all: log unhandled routes
-  app.all("*", (c) => {
-    log.warn(`Unhandled: ${c.req.method} ${c.req.path}`);
-    return c.json({ error: { message: "Not found", type: "not_found" } }, 404);
-  });
+  // --- Serve embedded dashboard (static export) ---
+  // Dashboard files are at ~/.hexos/dashboard/ (placed by installer or build script)
+  const dashboardDir = join(homedir(), ".hexos", "dashboard");
+  const hasDashboard = existsSync(dashboardDir);
+
+  if (hasDashboard) {
+    const MIME_TYPES: Record<string, string> = {
+      ".html": "text/html",
+      ".css": "text/css",
+      ".js": "application/javascript",
+      ".json": "application/json",
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".gif": "image/gif",
+      ".svg": "image/svg+xml",
+      ".ico": "image/x-icon",
+      ".woff": "font/woff",
+      ".woff2": "font/woff2",
+      ".ttf": "font/ttf",
+      ".txt": "text/plain",
+      ".webp": "image/webp",
+      ".avif": "image/avif",
+    };
+
+    app.get("*", async (c) => {
+      const urlPath = c.req.path;
+
+      // Skip API and proxy routes
+      if (urlPath.startsWith("/api/") || urlPath.startsWith("/v1/") || urlPath === "/health") {
+        return c.json({ error: { message: "Not found", type: "not_found" } }, 404);
+      }
+
+      // Try exact file match first
+      let filePath = join(dashboardDir, urlPath);
+      let file = Bun.file(filePath);
+      if (await file.exists()) {
+        const ext = extname(filePath);
+        const contentType = MIME_TYPES[ext] || "application/octet-stream";
+        return new Response(file, { headers: { "Content-Type": contentType, "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=31536000, immutable" } });
+      }
+
+      // Try with .html extension (Next.js static export convention)
+      filePath = join(dashboardDir, urlPath + ".html");
+      file = Bun.file(filePath);
+      if (await file.exists()) {
+        return new Response(file, { headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" } });
+      }
+
+      // Try index.html in directory
+      filePath = join(dashboardDir, urlPath, "index.html");
+      file = Bun.file(filePath);
+      if (await file.exists()) {
+        return new Response(file, { headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" } });
+      }
+
+      // SPA fallback: serve root index.html for client-side routing
+      filePath = join(dashboardDir, "index.html");
+      file = Bun.file(filePath);
+      if (await file.exists()) {
+        return new Response(file, { headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" } });
+      }
+
+      return c.json({ error: { message: "Not found", type: "not_found" } }, 404);
+    });
+
+    log.info(`Dashboard: serving from ${dashboardDir}`);
+  } else {
+    // No dashboard — catch-all returns 404
+    app.all("*", (c) => {
+      log.warn(`Unhandled: ${c.req.method} ${c.req.path}`);
+      return c.json({ error: { message: "Not found", type: "not_found" } }, 404);
+    });
+  }
 
   return app;
 }
