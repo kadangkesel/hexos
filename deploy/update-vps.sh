@@ -7,7 +7,7 @@ set -euo pipefail
 
 VERSION="${1:-}"
 GITHUB_REPO="kadangkesel/hexos"
-GITHUB_RAW="https://raw.githubusercontent.com/$GITHUB_REPO/main"
+GITHUB_RAW="https://raw.githubusercontent.com/$GITHUB_REPO/master"
 WEB_ROOT="/var/www/hexos"
 
 if [ -z "$VERSION" ]; then

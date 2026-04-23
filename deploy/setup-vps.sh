@@ -13,7 +13,7 @@ DOMAIN="hexos.kadangkesel.net"
 WEB_ROOT="/var/www/hexos"
 NGINX_CONF="/etc/nginx/sites-available/$DOMAIN"
 GITHUB_REPO="kadangkesel/hexos"
-GITHUB_RAW="https://raw.githubusercontent.com/$GITHUB_REPO/main"
+GITHUB_RAW="https://raw.githubusercontent.com/$GITHUB_REPO/master"
 
 info() { echo -e "\033[36m==>\033[0m $1"; }
 ok() { echo -e "\033[32m==>\033[0m $1"; }

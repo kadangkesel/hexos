@@ -192,6 +192,6 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             echo "${{ steps.version.outputs.version }}" > /var/www/hexos/version
-            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh" -o /var/www/hexos/install.sh
-            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1" -o /var/www/hexos/install.ps1
+            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/master/install.sh" -o /var/www/hexos/install.sh
+            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/master/install.ps1" -o /var/www/hexos/install.ps1
             echo "Updated hexos.kadangkesel.net to v${{ steps.version.outputs.version }}"
