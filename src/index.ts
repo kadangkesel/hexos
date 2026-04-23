@@ -559,11 +559,32 @@ program
       log.info("Run the following command to update:");
       console.log(chalk.cyan("  irm https://hexos.kadangkesel.net/install.ps1 | iex"));
     } else {
-      log.info("Updating via installer...");
-      const proc = Bun.spawn(["bash", "-c", "curl -fsSL https://hexos.kadangkesel.net/install | bash"], {
-        stdio: ["inherit", "inherit", "inherit"],
+      // Write a wrapper script that:
+      // 1. Waits for this hexos process to exit
+      // 2. Runs the installer
+      const myPid = process.pid;
+      const wrapper = `#!/bin/bash
+# Wait for hexos update process to exit (max 10s)
+for i in $(seq 1 20); do
+  kill -0 ${myPid} 2>/dev/null || break
+  sleep 0.5
+done
+# Run installer
+curl -fsSL https://hexos.kadangkesel.net/install | bash
+`;
+      const tmpScript = "/tmp/hexos-update-wrapper.sh";
+      const { writeFileSync } = await import("fs");
+      writeFileSync(tmpScript, wrapper, { mode: 0o755 });
+
+      // Spawn detached — runs after we exit
+      log.info("Starting update (hexos will restart automatically)...");
+      const child = Bun.spawn(["bash", tmpScript], {
+        stdio: ["ignore", "inherit", "inherit"],
       });
-      await proc.exited;
+      child.unref();
+
+      // Exit so binary is released
+      process.exit(0);
     }
   });
 
