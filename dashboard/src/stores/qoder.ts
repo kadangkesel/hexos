@@ -20,18 +20,21 @@ interface QoderState {
   connections: QoderConnection[];
   loading: boolean;
   error: string | null;
+  loginLoading: boolean;
 
   // Actions
   fetchConnections: () => Promise<void>;
   addManual: (uid: string, token: string, refreshToken?: string, label?: string) => Promise<{ ok: boolean; error?: string }>;
   importFromCli: (authDir?: string, label?: string) => Promise<{ ok: boolean; error?: string }>;
   importFromIde: () => Promise<{ ok: boolean; error?: string; email?: string; name?: string }>;
+  loginWithGoogle: (email: string, password: string, label?: string, headless?: boolean) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export const useQoderStore = create<QoderState>()((set, get) => ({
   connections: [],
   loading: false,
   error: null,
+  loginLoading: false,
 
   fetchConnections: async () => {
     set({ loading: true, error: null });
@@ -89,6 +92,25 @@ export const useQoderStore = create<QoderState>()((set, get) => ({
       }
       return { ok: false, error: res.error || "Unknown error" };
     } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "Failed" };
+    }
+  },
+
+  loginWithGoogle: async (email, password, label, headless) => {
+    set({ loginLoading: true });
+    try {
+      const res = await apiFetch<any>("/api/qoder/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password, label, headless: headless ?? true }),
+      });
+      set({ loginLoading: false });
+      if (res.ok) {
+        await get().fetchConnections();
+        return { ok: true };
+      }
+      return { ok: false, error: res.error || "Unknown error" };
+    } catch (err) {
+      set({ loginLoading: false });
       return { ok: false, error: err instanceof Error ? err.message : "Failed" };
     }
   },

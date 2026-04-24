@@ -15,6 +15,7 @@ import {
   XCircle,
   User,
   Zap,
+  Globe,
 } from "lucide-react";
 import {
   Card,
@@ -34,16 +35,21 @@ export default function QoderPage() {
     connections,
     loading,
     error,
+    loginLoading,
     fetchConnections,
     addManual,
     importFromCli,
     importFromIde,
+    loginWithGoogle,
   } = useQoderStore();
 
   const [manualUid, setManualUid] = useState("");
   const [manualToken, setManualToken] = useState("");
   const [manualRefresh, setManualRefresh] = useState("");
   const [manualLabel, setManualLabel] = useState("");
+  const [googleEmail, setGoogleEmail] = useState("");
+  const [googlePassword, setGooglePassword] = useState("");
+  const [googleLabel, setGoogleLabel] = useState("");
   const [submitting, setSubmitting] = useState<string | null>(null);
 
   useEffect(() => {
@@ -71,6 +77,29 @@ export default function QoderPage() {
       setManualLabel("");
     } else {
       toast.error(result.error || "Failed to add account");
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    if (!googleEmail.trim() || !googlePassword.trim()) {
+      toast.error("Email and password are required");
+      return;
+    }
+    setSubmitting("google");
+    const result = await loginWithGoogle(
+      googleEmail.trim(),
+      googlePassword.trim(),
+      googleLabel.trim() || undefined,
+      true
+    );
+    setSubmitting(null);
+    if (result.ok) {
+      toast.success("Qoder account connected via Google login");
+      setGoogleEmail("");
+      setGooglePassword("");
+      setGoogleLabel("");
+    } else {
+      toast.error(result.error || "Google login failed");
     }
   };
 
@@ -187,6 +216,72 @@ export default function QoderPage() {
         </Card>
       </motion.div>
 
+      {/* Google Login */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className="mt-4"
+      >
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Globe className="size-4" />
+              Login with Google
+            </CardTitle>
+            <CardDescription>
+              Automate Google OAuth login via browser automation (Camoufox). Creates a new Qoder account connection.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="google-email">Google Email</Label>
+                <Input
+                  id="google-email"
+                  placeholder="user@gmail.com"
+                  value={googleEmail}
+                  onChange={(e) => setGoogleEmail(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="google-password">Google Password</Label>
+                <Input
+                  id="google-password"
+                  placeholder="password"
+                  type="password"
+                  value={googlePassword}
+                  onChange={(e) => setGooglePassword(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="google-label">
+                  Label{" "}
+                  <span className="text-muted-foreground">(optional)</span>
+                </Label>
+                <Input
+                  id="google-label"
+                  placeholder="my-qoder-account"
+                  value={googleLabel}
+                  onChange={(e) => setGoogleLabel(e.target.value)}
+                />
+              </div>
+            </div>
+            <Button
+              onClick={handleGoogleLogin}
+              disabled={submitting !== null || !googleEmail.trim() || !googlePassword.trim()}
+            >
+              {submitting === "google" ? (
+                <Loader2 className="size-4 animate-spin mr-2" />
+              ) : (
+                <Globe className="size-4 mr-2" />
+              )}
+              {submitting === "google" ? "Logging in..." : "Login with Google"}
+            </Button>
+          </CardContent>
+        </Card>
+      </motion.div>
+
       {/* Import Methods */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -194,7 +289,7 @@ export default function QoderPage() {
         transition={{ delay: 0.2 }}
         className="mt-4"
       >
-        <h2 className="text-lg font-semibold mb-3">Add Account</h2>
+        <h2 className="text-lg font-semibold mb-3">Import Account</h2>
         <div className="grid gap-4 md:grid-cols-2">
           {/* Import from IDE */}
           <Card>

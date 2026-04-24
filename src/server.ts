@@ -1010,6 +1010,28 @@ export function createApp() {
     }
   });
 
+  // Qoder browser login (Camoufox automation)
+  app.post("/api/qoder/login", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { email, password, label, headless } = body as {
+      email?: string;
+      password?: string;
+      label?: string;
+      headless?: boolean;
+    };
+
+    if (!email || !password) {
+      return c.json({ error: "Email and password are required" }, 400);
+    }
+
+    const { oauthQoderAutomated } = await import("./auth/oauth.ts");
+    const result = await oauthQoderAutomated(email, password, label, undefined, headless ?? true);
+    if (!result.success) {
+      return c.json({ error: result.error }, 400);
+    }
+    return c.json({ ok: true });
+  });
+
   // --- Models ---
   app.get("/api/models", (c) => {
     const models = Object.entries(MODEL_CATALOG).map(([alias, entry]) => ({

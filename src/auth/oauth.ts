@@ -604,7 +604,7 @@ export async function batchConnect(
             const r = await oauthClineAutomated(account.email, account.password, label, proxy, headless);
             providerResults.push({ provider: "cline", ...r });
           } else if (provider === "qoder") {
-            const r = await oauthQoderDeviceLogin(label);
+            const r = await oauthQoderAutomated(account.email, account.password, label, proxy, headless);
             providerResults.push({ provider: "qoder", ...r });
           }
         }
@@ -1016,35 +1016,158 @@ export async function refreshKiro(refreshToken: string): Promise<{ accessToken: 
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Qoder: device polling login (CLI-style, no browser automation needed)
+// Qoder: automated OAuth via browser automation (Camoufox)
 // ---------------------------------------------------------------------------
 
+interface QoderLoginResult {
+  type: "progress" | "result" | "error" | "debug";
+  step?: string;
+  message?: string;
+  success?: boolean;
+  accessToken?: string;
+  refreshToken?: string;
+  uid?: string;
+  email?: string;
+  name?: string;
+  error?: string;
+}
+
 /**
- * Login to Qoder via device polling flow.
- * Opens browser for user to login, polls for token.
- * Token doesn't expire — valid forever until manual logout.
+ * Login to Qoder via browser automation (Camoufox).
+ * Automates Google OAuth login on qoder.com, then extracts device token.
+ */
+export async function oauthQoderAutomated(
+  email: string,
+  password: string,
+  label?: string,
+  proxy?: string,
+  headless = true,
+): Promise<{ success: boolean; error?: string }> {
+  const accountLabel = label || email;
+
+  if (!isAutomationReady()) {
+    log.error("Automation not set up. Run: hexos auth setup-automation");
+    return { success: false, error: "Automation not set up" };
+  }
+
+  log.info(`[${accountLabel}] Launching Qoder browser automation...`);
+
+  const proc = Bun.spawn(
+    [VENV_PYTHON, QODER_LOGIN_SCRIPT, "--email", email, "--password", password],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        HEXOS_DEBUG: process.env.HEXOS_DEBUG || "false",
+        ...(proxy ? { HEXOS_PROXY: proxy, HTTP_PROXY: proxy, HTTPS_PROXY: proxy } : {}),
+        HEXOS_HEADLESS: headless ? "true" : "false",
+      },
+    },
+  );
+  activeProcs.add(proc);
+
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: QoderLoginResult | null = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg: QoderLoginResult = JSON.parse(line);
+          if (msg.type === "progress") {
+            log.info(`[${accountLabel}] ${msg.message}`);
+          } else if (msg.type === "result") {
+            finalResult = msg;
+            const hasAccess = !!msg.accessToken;
+            const hasRefresh = !!msg.refreshToken;
+            log.info(`[${accountLabel}] Result: success=${msg.success} accessToken=${hasAccess ? "present" : "EMPTY"} refreshToken=${hasRefresh ? "present" : "EMPTY"} uid=${msg.uid ? "present" : "EMPTY"}`);
+          } else if (msg.type === "error") {
+            log.error(`[${accountLabel}] ${msg.error}`);
+          } else if (msg.type === "debug") {
+            log.info(`[${accountLabel}] [debug] ${msg.message}`);
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
+  if (buffer.trim()) {
+    try {
+      const msg: QoderLoginResult = JSON.parse(buffer);
+      if (msg.type === "result") finalResult = msg;
+    } catch {}
+  }
+
+  const exitCode = await proc.exited;
+  activeProcs.delete(proc);
+
+  let stderrText = "";
+  try {
+    const stderrReader = proc.stderr.getReader();
+    const { value } = await stderrReader.read();
+    if (value) stderrText = decoder.decode(value);
+  } catch {}
+
+  if (exitCode !== 0 && !finalResult) {
+    const errMsg = stderrText.trim() || `Process exited with code ${exitCode}`;
+    log.error(`[${accountLabel}] Qoder automation failed: ${errMsg}`);
+    return { success: false, error: errMsg };
+  }
+
+  if (!finalResult || !finalResult.success) {
+    const errMsg = finalResult?.error || "Unknown Qoder automation error";
+    log.error(`[${accountLabel}] Qoder login failed: ${errMsg}`);
+    return { success: false, error: errMsg };
+  }
+
+  // Reject results with empty tokens
+  if (!finalResult.accessToken) {
+    log.error(`[${accountLabel}] Qoder login succeeded in browser but no token obtained. Skipping save.`);
+    return { success: false, error: "No accessToken obtained from Qoder login" };
+  }
+
+  // Save connection as "qoder" provider
+  const conn = await saveConnection({
+    provider: "qoder",
+    label: accountLabel,
+    accessToken: finalResult.accessToken,
+    refreshToken: finalResult.refreshToken || "",
+    uid: finalResult.uid || "",
+  });
+
+  log.ok(`[${accountLabel}] Qoder connected! (${finalResult.email || finalResult.uid})`);
+  return { success: true };
+}
+
+/**
+ * Legacy: Login to Qoder via device polling flow (manual browser).
  */
 export async function oauthQoderDeviceLogin(
   label = "Qoder Account",
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Step 1: Generate nonce
     const nonce = require("crypto").randomBytes(16).toString("hex");
 
-    // Step 2: Start device token polling
     log.info(`[${label}] Starting Qoder device login...`);
     const loginUrl = `https://qoder.com/device/selectAccounts?nonce=${nonce}`;
 
     log.info(`Open this URL in your browser to login:`);
     console.log(`\n  ${loginUrl}\n`);
 
-    // Try to open browser automatically
     try {
       const { default: open } = await import("open");
       await open(loginUrl);
     } catch {}
 
-    // Step 3: Poll for token
     log.info("Waiting for Qoder login...");
     const result = await _pollQoderDeviceToken(nonce);
 
@@ -1052,7 +1175,6 @@ export async function oauthQoderDeviceLogin(
       return { success: false, error: "Login timeout" };
     }
 
-    // Step 4: Save connection
     await saveConnection({
       provider: "qoder",
       label,
