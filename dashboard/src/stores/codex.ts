@@ -14,6 +14,12 @@ interface CodexConnection {
     usedCredits: number;
     packageName: string;
     expiresAt: string;
+    primaryUsedPercent?: number;
+    primaryWindowMinutes?: number;
+    primaryResetAt?: number;
+    secondaryUsedPercent?: number;
+    secondaryWindowMinutes?: number;
+    secondaryResetAt?: number;
   };
 }
 

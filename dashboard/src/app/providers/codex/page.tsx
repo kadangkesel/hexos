@@ -209,16 +209,21 @@ export default function CodexProviderPage() {
             {connections.length > 0 && (
               <div className="space-y-3">
                 {connections.map((conn) => {
-                  const used = conn.credit?.usedCredits ?? 0;
-                  const total = conn.credit?.totalCredits ?? 100;
-                  const remaining = conn.credit?.remainingCredits ?? total;
-                  const pct = total > 0 ? Math.round((used / total) * 100) : 0;
-                  const barColor = pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500";
+                  const primary = conn.credit?.primaryUsedPercent ?? 0;
+                  const secondary = conn.credit?.secondaryUsedPercent ?? 0;
+                  const primaryColor = primary > 80 ? "bg-red-500" : primary > 50 ? "bg-amber-500" : "bg-emerald-500";
+                  const secondaryColor = secondary > 80 ? "bg-red-500" : secondary > 50 ? "bg-amber-500" : "bg-emerald-500";
+
+                  const primaryResetAt = conn.credit?.primaryResetAt;
+                  const secondaryResetAt = conn.credit?.secondaryResetAt;
+                  const now = Date.now() / 1000;
+                  const primaryResetIn = primaryResetAt ? Math.max(0, Math.round((primaryResetAt - now) / 60)) : null;
+                  const secondaryResetIn = secondaryResetAt ? Math.max(0, Math.round((secondaryResetAt - now) / 3600)) : null;
 
                   return (
                   <div
                     key={conn.id}
-                    className="rounded-lg border p-3 space-y-2"
+                    className="rounded-lg border p-3 space-y-2.5"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -262,16 +267,29 @@ export default function CodexProviderPage() {
                         </Button>
                       </div>
                     </div>
-                    {/* Usage bar */}
+                    {/* 5-hour window */}
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>Window usage</span>
-                        <span>{remaining}/{total} remaining ({pct}% used)</span>
+                        <span>5h window</span>
+                        <span>{primary}% used{primaryResetIn !== null ? ` · resets in ${primaryResetIn}m` : ""}</span>
                       </div>
-                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                         <div
-                          className={`h-full rounded-full transition-all ${barColor}`}
-                          style={{ width: `${Math.min(pct, 100)}%` }}
+                          className={`h-full rounded-full transition-all ${primaryColor}`}
+                          style={{ width: `${Math.min(primary, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    {/* 7-day window */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>7d window</span>
+                        <span>{secondary}% used{secondaryResetIn !== null ? ` · resets in ${secondaryResetIn}h` : ""}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${secondaryColor}`}
+                          style={{ width: `${Math.min(secondary, 100)}%` }}
                         />
                       </div>
                     </div>

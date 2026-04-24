@@ -605,6 +605,13 @@ async function handleCodexResponse(
       packageName: `ChatGPT ${rateLimits.planType}`,
       expiresAt: rateLimits.primaryResetAt ? new Date(rateLimits.primaryResetAt * 1000).toISOString() : "",
       fetchedAt: Date.now(),
+      // Codex-specific: dual window rate limits
+      primaryUsedPercent: rateLimits.primaryUsedPercent,
+      primaryWindowMinutes: rateLimits.primaryWindowMinutes,
+      primaryResetAt: rateLimits.primaryResetAt,
+      secondaryUsedPercent: rateLimits.secondaryUsedPercent,
+      secondaryWindowMinutes: rateLimits.secondaryWindowMinutes,
+      secondaryResetAt: rateLimits.secondaryResetAt,
     },
   } as any);
 
