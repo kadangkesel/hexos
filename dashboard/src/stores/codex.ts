@@ -8,11 +8,12 @@ interface CodexConnection {
   status: string;
   planType?: string;
   usageCount?: number;
-  rateLimits?: {
-    primaryUsedPercent: number;
-    secondaryUsedPercent: number;
-    primaryWindowMinutes: number;
-    secondaryWindowMinutes: number;
+  credit?: {
+    totalCredits: number;
+    remainingCredits: number;
+    usedCredits: number;
+    packageName: string;
+    expiresAt: string;
   };
 }
 
@@ -68,6 +69,7 @@ export const useCodexStore = create<CodexState>((set, get) => ({
           status: c.status || "active",
           planType: c.credit?.packageName,
           usageCount: c.usageCount,
+          credit: c.credit,
         }));
       set({ connections: codexConns, loading: false });
     } catch (e: any) {

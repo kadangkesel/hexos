@@ -208,55 +208,76 @@ export default function CodexProviderPage() {
             )}
             {connections.length > 0 && (
               <div className="space-y-3">
-                {connections.map((conn) => (
+                {connections.map((conn) => {
+                  const used = conn.credit?.usedCredits ?? 0;
+                  const total = conn.credit?.totalCredits ?? 100;
+                  const remaining = conn.credit?.remainingCredits ?? total;
+                  const pct = total > 0 ? Math.round((used / total) * 100) : 0;
+                  const barColor = pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500";
+
+                  return (
                   <div
                     key={conn.id}
-                    className="flex items-center justify-between rounded-lg border p-3"
+                    className="rounded-lg border p-3 space-y-2"
                   >
-                    <div className="flex items-center gap-3">
-                      {conn.status === "active" ? (
-                        <CheckCircle2 className="size-4 text-green-500" />
-                      ) : (
-                        <XCircle className="size-4 text-destructive" />
-                      )}
-                      <div>
-                        <p className="text-sm font-medium">{conn.label}</p>
-                        {conn.email && (
-                          <p className="text-xs text-muted-foreground">
-                            {conn.email}
-                          </p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        {conn.status === "active" ? (
+                          <CheckCircle2 className="size-4 text-green-500" />
+                        ) : (
+                          <XCircle className="size-4 text-destructive" />
                         )}
+                        <div>
+                          <p className="text-sm font-medium">{conn.label}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {conn.usageCount ?? 0} requests
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {conn.planType && (
+                          <Badge variant="outline">
+                            {conn.planType}
+                          </Badge>
+                        )}
+                        <Badge
+                          variant={
+                            conn.status === "active" ? "default" : "destructive"
+                          }
+                        >
+                          {conn.status}
+                        </Badge>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          disabled={submitting !== null}
+                          onClick={() => handleRemove(conn.id)}
+                        >
+                          {submitting === `remove-${conn.id}` ? (
+                            <Loader2 className="size-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3" />
+                          )}
+                        </Button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge
-                        variant={
-                          conn.status === "active" ? "default" : "destructive"
-                        }
-                      >
-                        {conn.status}
-                      </Badge>
-                      {conn.planType && (
-                        <Badge variant="outline">
-                          {conn.planType}
-                        </Badge>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-7"
-                        disabled={submitting !== null}
-                        onClick={() => handleRemove(conn.id)}
-                      >
-                        {submitting === `remove-${conn.id}` ? (
-                          <Loader2 className="size-3 animate-spin" />
-                        ) : (
-                          <Trash2 className="size-3" />
-                        )}
-                      </Button>
+                    {/* Usage bar */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Window usage</span>
+                        <span>{remaining}/{total} remaining ({pct}% used)</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${barColor}`}
+                          style={{ width: `${Math.min(pct, 100)}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>
