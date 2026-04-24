@@ -42,7 +42,7 @@ export function buildCodexRequestBody(
         if (tc.id && tc.function?.name) {
           input.push({
             type: "function_call",
-            id: tc.id,
+            call_id: tc.id,
             name: tc.function.name,
             arguments: tc.function?.arguments || "{}",
           });
@@ -68,6 +68,7 @@ export function buildCodexRequestBody(
   };
 
   if (instructions) body.instructions = instructions;
+  else body.instructions = "You are a helpful assistant.";
   // Note: Codex Responses API does NOT support temperature, top_p, max_output_tokens, etc.
   // Only pass: model, input, stream, store, instructions, reasoning, tools, tool_choice
 
@@ -173,10 +174,11 @@ export function createCodexStreamTransformer(
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 
           } else if (evType === "response.output_item.added") {
-            // Tool call started — Responses API sends {item: {type: "function_call", id, name, ...}}
+            // Tool call started — Responses API sends {item: {type: "function_call", call_id, name, ...}}
             const item = data.item;
             if (item?.type === "function_call") {
-              pendingToolCalls.set(item.id, { id: item.id, name: item.name || "", arguments: "" });
+              const callId = item.call_id || item.id;
+              pendingToolCalls.set(item.id || callId, { id: callId, name: item.name || "", arguments: "" });
               // Emit initial tool_calls delta with id and function name
               const tcChunk = {
                 id: `chatcmpl-${requestId}`,
@@ -188,7 +190,7 @@ export function createCodexStreamTransformer(
                   delta: {
                     tool_calls: [{
                       index: pendingToolCalls.size - 1,
-                      id: item.id,
+                      id: callId,
                       type: "function",
                       function: { name: item.name || "", arguments: "" },
                     }],
@@ -199,13 +201,13 @@ export function createCodexStreamTransformer(
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(tcChunk)}\n\n`));
             }
 
-          } else if (evType === "response.custom_tool_call_input.delta") {
-            // Tool call arguments streaming
-            const callId = data.item_id;
-            const tc = callId ? pendingToolCalls.get(callId) : null;
+          } else if (evType === "response.function_call_arguments.delta") {
+            // Tool call arguments streaming (actual event name from Codex API)
+            const itemId = data.item_id;
+            const tc = itemId ? pendingToolCalls.get(itemId) : null;
             if (tc && data.delta) {
               tc.arguments += data.delta;
-              const idx = [...pendingToolCalls.keys()].indexOf(callId);
+              const idx = [...pendingToolCalls.keys()].indexOf(itemId);
               const argChunk = {
                 id: `chatcmpl-${requestId}`,
                 object: "chat.completion.chunk",
