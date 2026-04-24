@@ -842,9 +842,10 @@ async def _cli_device_flow(page) -> dict | None:
                 from winpty import PtyProcess
                 debug("Using pywinpty ConPTY for TUI interaction")
 
-                # Suppress CLI from opening external browser — we visit URL in Camoufox instead.
-                # On Linux: BROWSER=echo prevents xdg-open. On Windows: Go uses rundll32
-                # which we can't easily block, so Chrome may briefly open (harmless).
+                # Suppress CLI from opening external browser.
+                # BROWSER=echo works on Linux (xdg-open checks it).
+                # On Windows, Go uses rundll32 which ignores BROWSER — Chrome may briefly
+                # open but it's harmless; actual auth happens in Camoufox.
                 cli_env = {**os.environ, "BROWSER": "echo", "DISPLAY": ""}
                 pty_proc = PtyProcess.spawn(actual_exe, dimensions=(40, 500), env=cli_env)
 
@@ -1229,7 +1230,16 @@ async def _cli_device_flow(page) -> dict | None:
 
 
 async def run_login(email: str, password: str):
-    """Run the full Qoder OAuth login flow via Google."""
+    """
+    Run the full Qoder login flow:
+      1. Spawn CLI → get device login URL (CLI registers nonce at server)
+      2. Launch Camoufox → visit CLI URL → Google OAuth → land on approve page
+      3. Click "Continue" to approve
+      4. CLI poll succeeds → auth file written
+      5. Decrypt auth file → security_oauth_token
+    
+    Single login — no double authentication.
+    """
     browser = None
     manager = None
 
@@ -1241,25 +1251,22 @@ async def run_login(email: str, password: str):
         return
 
     try:
-        # Step 1: Generate PKCE pair for device flow
-        code_verifier, code_challenge = generate_pkce_pair()
-        nonce = secrets.token_hex(16)
-        debug(f"PKCE: verifier={code_verifier[:20]}... nonce={nonce}")
+        # ── Step 1: Spawn CLI and get login URL ──────────────────────────
+        progress("cli_start", "Starting Qoder CLI to get login URL...")
+        cli_login_url, cli_handles = await _start_cli_and_get_url()
 
-        # Step 2: Build SSO URL
-        # oauth_callback points to /device/selectAccounts so after Google login,
-        # user lands on the device page which auto-approves
-        device_params = urlencode({
-            "nonce": nonce,
-            "code_challenge": code_challenge,
-            "code_challenge_method": "S256",
-            "directLogin": "true",
-        })
-        oauth_callback = f"{QODER_DEVICE_SELECT}?{device_params}"
-        sso_url = f"{QODER_SSO_GOOGLE}?oauth_callback={urlencode({'': oauth_callback})[1:]}"
-        debug(f"SSO URL: {sso_url[:200]}...")
+        if not cli_login_url:
+            result_failure("Could not get login URL from Qoder CLI. Is qodercli installed?")
+            return
 
-        # Step 3: Launch browser
+        debug(f"CLI login URL: {cli_login_url[:200]}")
+
+        # The CLI URL goes to /device/selectAccounts which redirects to Google OAuth
+        # We need to build a Google SSO URL that lands back on the CLI's device page
+        # The CLI URL already has nonce + challenge registered at server
+        # We just need to visit it, login with Google, and approve
+
+        # ── Step 2: Launch Camoufox ──────────────────────────────────────
         progress("browser", "Launching browser...")
 
         is_headless = os.getenv("HEXOS_HEADLESS", "true").lower() == "true"
@@ -1288,14 +1295,22 @@ async def run_login(email: str, password: str):
         page = await browser.new_page()
         page.set_default_timeout(20000)
 
-        # Step 4: Navigate to Qoder SSO (Google login)
+        # ── Step 3: Visit CLI login URL ──────────────────────────────────
+        # This URL is /device/selectAccounts?nonce=...&challenge=...
+        # If user is not logged in to Qoder, it shows "Sign in" page
+        # We need to click "Login with Google" or navigate to SSO directly
         progress("navigate", "Navigating to Qoder login page...")
-        debug(f"Navigating to: {sso_url[:200]}")
+
+        # Build Google SSO URL with oauth_callback pointing to CLI's device URL
+        # This way: Google login → redirect to /sso/callback/google → redirect to device page
+        cli_url_encoded = urlencode({"": cli_login_url})[1:]  # URL-encode the CLI URL
+        sso_url = f"{QODER_SSO_GOOGLE}?oauth_callback={cli_url_encoded}"
+        debug(f"SSO URL: {sso_url[:200]}")
+
         try:
             await page.goto(sso_url, wait_until="domcontentloaded", timeout=30000)
         except Exception as nav_exc:
             debug(f"First navigation failed: {nav_exc}, retrying...")
-            progress("navigate_retry", "Navigation failed, retrying...")
             await asyncio.sleep(2.0)
             try:
                 await page.goto(sso_url, wait_until="domcontentloaded", timeout=30000)
@@ -1304,38 +1319,21 @@ async def run_login(email: str, password: str):
                 return
         await asyncio.sleep(2.0)
 
-        # Step 5: Auth loop — automate Google login
+        # ── Step 4: Google OAuth automation ───────────────────────────────
         progress("auth_loop", "Automating Google login...")
         page.set_default_timeout(5000)
 
         email_transition_deadline = 0.0
         password_transition_deadline = 0.0
         email_step_started_at = None
-        landed_on_qoder = False
-        device_token_result = None
-
-        # Track if we've captured the device redirect
-        redirect_url_captured = None
-
-        async def on_response(response):
-            nonlocal redirect_url_captured
-            if redirect_url_captured:
-                return
-            try:
-                url = response.url
-                if "/device/redirect" in url and response.status == 200:
-                    body = await response.text()
-                    debug(f"Device redirect response: {body[:300]}")
-                    data = json.loads(body)
-                    if data.get("redirect_url"):
-                        redirect_url_captured = data["redirect_url"]
-                        debug(f"Captured redirect URL: {redirect_url_captured[:200]}")
-            except Exception:
-                pass
-
-        page.on("response", on_response)
+        auth_file = os.path.join(os.path.expanduser("~/.qoder/.auth"), "user")
 
         for iteration in range(AUTH_LOOP_MAX_ITERATIONS):
+            # Check if CLI already got the token (auth file appeared)
+            if os.path.exists(auth_file):
+                progress("auth_complete", "CLI received token!")
+                break
+
             try:
                 current_url = page.url
             except Exception:
@@ -1348,68 +1346,50 @@ async def run_login(email: str, password: str):
             on_qoder = "qoder.com" in current_host
             now = time.monotonic()
 
-            # Debug URL changes
             if iteration % 10 == 0:
                 debug(f"Iteration {iteration}: url={current_url[:120]}")
 
-            # Check if we captured the device redirect
-            if redirect_url_captured:
-                progress("device_redirect", "Device authorization redirect captured!")
-                break
-
-            # Check if we landed on Qoder after Google login
-            if on_qoder and not landed_on_qoder and not on_google:
-                # Check if we're on the device/selectAccounts page
-                if "/device/selectAccounts" in current_path or "/device/" in current_path:
-                    landed_on_qoder = True
-                    progress("qoder_landed", "Landed on Qoder device page, waiting for auto-redirect...")
-                    # The page JS should auto-call /device/redirect when directLogin=true
-                    # Wait for it
-                    for _ in range(30):
-                        if redirect_url_captured:
+            # ── On Qoder: device approve page ────────────────────────────
+            if on_qoder and not on_google:
+                if "/device/" in current_path or "/selectAccounts" in current_path:
+                    progress("device_approve", "On device approval page, clicking Continue...")
+                    await asyncio.sleep(2.0)
+                    # Click Continue/Approve button
+                    for _ in range(10):
+                        if os.path.exists(auth_file):
                             break
-                        await asyncio.sleep(1.0)
-                        # Also try clicking Continue if needed
-                        try:
-                            for text in ["Continue", "Lanjutkan"]:
+                        for text in ["Continue", "Lanjutkan", "Approve", "Confirm"]:
+                            try:
                                 btn = page.get_by_text(text, exact=False).first
                                 if await btn.count() > 0 and await btn.is_visible():
                                     await btn.click()
                                     debug(f"Clicked '{text}'")
+                                    await asyncio.sleep(3.0)
                                     break
-                        except Exception:
-                            pass
+                            except Exception:
+                                continue
+                        await asyncio.sleep(2.0)
+                    # Wait for CLI to pick up the approval
+                    for _ in range(15):
+                        if os.path.exists(auth_file):
+                            progress("auth_complete", "CLI received token!")
+                            break
+                        await asyncio.sleep(1.0)
                     break
 
                 elif "/account/" in current_path or "/LoginCallback" in current_url:
-                    landed_on_qoder = True
-                    progress("qoder_logged_in", "Logged into Qoder, navigating to device page...")
-                    # Navigate to device page
-                    device_url = f"{QODER_DEVICE_SELECT}?{device_params}"
-                    await page.goto(device_url, wait_until="domcontentloaded", timeout=30000)
+                    # Logged in but landed on profile — navigate to CLI device URL
+                    progress("redirect_to_device", "Redirecting to device approval page...")
+                    await page.goto(cli_login_url, wait_until="domcontentloaded", timeout=30000)
                     await asyncio.sleep(3.0)
-                    # Wait for redirect
-                    for _ in range(30):
-                        if redirect_url_captured:
-                            break
-                        await asyncio.sleep(1.0)
-                        try:
-                            for text in ["Continue", "Lanjutkan"]:
-                                btn = page.get_by_text(text, exact=False).first
-                                if await btn.count() > 0 and await btn.is_visible():
-                                    await btn.click()
-                                    debug(f"Clicked '{text}'")
-                                    break
-                        except Exception:
-                            pass
-                    break
+                    continue
 
-            # Skip SetSID redirects
+            # ── Skip SetSID redirects ─────────────────────────────────────
             if "SetSID" in current_url or "/accounts/set" in current_url.lower():
                 await asyncio.sleep(0.5)
                 continue
 
-            # Google auth steps
+            # ── Google auth steps ─────────────────────────────────────────
             if on_google:
                 at_password = await _is_password_step(page)
                 at_email = await _is_email_step(page)
@@ -1472,7 +1452,7 @@ async def run_login(email: str, password: str):
                             progress("challenge", f"Challenge detected: {blocking[5:]} — solve in browser (180s)...")
                             for _ in range(360):
                                 await asyncio.sleep(0.5)
-                                if redirect_url_captured:
+                                if os.path.exists(auth_file):
                                     break
                                 new_url = page.url
                                 if "accounts.google.com" not in new_url or "/challenge/" not in new_url:
@@ -1490,152 +1470,336 @@ async def run_login(email: str, password: str):
             await _click_continue_button(page)
             await asyncio.sleep(1.0)
         else:
-            # Loop exhausted without breaking
-            if not redirect_url_captured and not landed_on_qoder:
-                result_failure("Auth loop timeout: did not complete Google login")
+            if not os.path.exists(auth_file):
+                result_failure("Auth loop timeout: did not complete login")
                 return
 
-        # Step 6: Extract token via session cookies
-        progress("extract_token", "Extracting session cookies...")
-        cookie_str = await _get_cookies_string(page)
+        # ── Step 5: Decrypt auth file ────────────────────────────────────
+        progress("decrypt", "Decrypting CLI auth file...")
+        await asyncio.sleep(1.0)  # Give CLI time to finish writing
 
-        if not cookie_str:
-            result_failure("No Qoder session cookies found after login")
+        auth_dir = os.path.expanduser("~/.qoder/.auth")
+        id_file = os.path.join(auth_dir, "id")
+
+        if not os.path.exists(auth_file) or not os.path.exists(id_file):
+            result_failure("Auth file not created by CLI")
             return
-
-        # Step 7: Get user info
-        progress("user_info", "Fetching user info...")
-        user_info = await _get_user_info(cookie_str)
-
-        if not user_info or not user_info.get("uid"):
-            debug("Could not get user info from /api/v1/me")
-            # Try alternate: maybe we need to wait for the page to fully load
-            await asyncio.sleep(3.0)
-            cookie_str = await _get_cookies_string(page)
-            user_info = await _get_user_info(cookie_str)
-
-        if not user_info or not user_info.get("uid"):
-            result_failure("Could not get user info from Qoder session")
-            return
-
-        uid = user_info["uid"]
-        email_addr = user_info.get("email", "")
-        name = user_info.get("name", "")
-        progress("user_info_ok", f"User: {email_addr or name or uid}")
-
-        # Step 8: Use CLI binary for device flow token extraction
-        # The CLI handles nonce registration + polling at center.qoder.sh correctly.
-        # Since Camoufox is already logged in, visiting the CLI's login URL auto-approves.
-        progress("cli_login", "Starting CLI-assisted device flow...")
-
-        cli_token_result = await _cli_device_flow(page)
-
-        if cli_token_result:
-            token = cli_token_result.get("security_oauth_token", "")
-            refresh = cli_token_result.get("refresh_token", "")
-            cli_uid = cli_token_result.get("uid", uid)
-            cli_email = cli_token_result.get("email", email_addr)
-            cli_name = cli_token_result.get("name", name)
-            if token:
-                progress("token_ok", f"Token obtained via CLI device flow for {cli_email or cli_uid}")
-                result_success(token, refresh, cli_uid, cli_email, cli_name)
-                return
-
-        # Fallback: try PAT creation via browser
-        progress("create_pat", "CLI flow failed, trying PAT creation via browser...")
-
-        pat_name = f"hexos-{secrets.token_hex(4)}"
-        pat_token = None
 
         try:
-            await page.goto(f"{QODER_BASE}/account/access-tokens", wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(4.0)
+            with open(id_file, "r") as f:
+                machine_id = f.read().strip()
+            with open(auth_file, "r") as f:
+                encrypted_b64 = f.read().strip()
 
-            pat_response_data = {"result": None}
+            from Crypto.Cipher import AES
+            key = machine_id[:16].encode("utf8")
+            encrypted = base64.b64decode(encrypted_b64)
+            cipher = AES.new(key, AES.MODE_CBC, key)
+            decrypted = cipher.decrypt(encrypted)
+            pad_len = decrypted[-1]
+            if 1 <= pad_len <= 16:
+                decrypted = decrypted[:-pad_len]
 
-            async def capture_responses(response):
-                try:
-                    url = response.url
-                    if "/api/v1/me/personal-access-tokens" in url:
-                        body = await response.text()
-                        debug(f"PAT API [{response.request.method}] {response.status}: {body[:300]}")
-                        if response.request.method == "POST" and response.status in (200, 201):
-                            pat_response_data["result"] = json.loads(body)
-                except Exception:
-                    pass
+            data = json.loads(decrypted.decode("utf8"))
+            token = data.get("security_oauth_token", "")
+            refresh = data.get("refresh_token", "")
+            uid = data.get("uid", "")
+            email_addr = data.get("email", "")
+            name = data.get("name", "")
 
-            page.on("response", capture_responses)
-            await asyncio.sleep(2.0)
+            debug(f"Decrypted: uid={uid}, email={email_addr}, token={token[:15]}...")
 
-            clicked_create = False
-            for sel in ['button:has-text("Create")', 'button:has-text("New")', 'button:has-text("Generate")', '.ant-btn-primary']:
-                try:
-                    el = await page.query_selector(sel)
-                    if el and await el.is_visible():
-                        await el.click()
-                        clicked_create = True
-                        await asyncio.sleep(2.0)
-                        break
-                except Exception:
-                    continue
+            if not token:
+                result_failure("Decrypted auth file but no security_oauth_token found")
+                return
 
-            if clicked_create:
-                await asyncio.sleep(1.5)
-                for sel in ['.ant-modal input[type="text"]', 'input[placeholder*="name" i]', '.ant-input']:
-                    try:
-                        inp = await page.query_selector(sel)
-                        if inp and await inp.is_visible():
-                            await inp.click()
-                            await inp.fill(pat_name)
-                            break
-                    except Exception:
-                        continue
-
-                await asyncio.sleep(0.5)
-                for sel in ['.ant-modal .ant-btn-primary', 'button:has-text("OK")', 'button:has-text("Create")']:
-                    try:
-                        el = await page.query_selector(sel)
-                        if el and await el.is_visible():
-                            await el.click()
-                            await asyncio.sleep(3.0)
-                            break
-                    except Exception:
-                        continue
-
-                for _ in range(15):
-                    if pat_response_data["result"]:
-                        break
-                    await asyncio.sleep(1.0)
-
-            if pat_response_data["result"]:
-                data = pat_response_data["result"]
-                pat_token = (
-                    data.get("token") or data.get("access_token")
-                    or data.get("security_oauth_token") or data.get("value")
-                    or data.get("plainTextToken") or data.get("pat") or ""
-                )
+            progress("token_ok", f"Token obtained for {email_addr or uid}")
+            result_success(token, refresh, uid, email_addr, name)
 
         except Exception as exc:
-            debug(f"PAT creation error: {exc}")
-
-        if pat_token:
-            progress("token_ok", f"PAT created for {email_addr or uid}")
-            result_success(pat_token, "", uid, email_addr, name)
-            return
-
-        result_failure(
-            f"Logged in as {email_addr or uid} but could not extract token. "
-            "Both CLI device flow and PAT creation failed."
-        )
+            result_failure(f"Auth file decrypt error: {exc}")
 
     except Exception as exc:
         result_failure(f"Browser automation error: {exc}")
     finally:
+        # Cleanup CLI process
+        _cleanup_cli_handles()
+        # Close browser
         if browser and manager:
             try:
                 await manager.__aexit__(None, None, None)
             except Exception:
                 pass
+
+
+# Global CLI handles for cleanup
+_active_cli_handles = {}
+
+
+def _cleanup_cli_handles():
+    """Kill any active CLI processes."""
+    for key, handle in list(_active_cli_handles.items()):
+        try:
+            if hasattr(handle, 'terminate'):
+                handle.terminate()
+            elif hasattr(handle, 'kill'):
+                handle.kill()
+            elif hasattr(handle, 'close'):
+                handle.close()
+        except Exception:
+            pass
+    _active_cli_handles.clear()
+
+
+async def _start_cli_and_get_url() -> tuple:
+    """
+    Spawn Qoder CLI, send /login command, and extract the device login URL.
+    Returns (login_url, handles_dict) or (None, None).
+    CLI process is kept alive — caller must cleanup via _cleanup_cli_handles().
+    """
+    import subprocess
+    import shutil
+    import re as _re
+
+    # Find qodercli binary
+    cli_path = shutil.which("qodercli")
+    if not cli_path:
+        search_paths = [
+            os.path.expanduser("~/.local/bin/qodercli"),
+            os.path.expanduser("~/.qoder/bin/qodercli/qodercli-0.1.47"),
+            "/usr/local/bin/qodercli",
+        ]
+        if sys.platform == "win32":
+            appdata = os.environ.get("APPDATA", "")
+            search_paths.extend([
+                os.path.join(appdata, "npm", "qodercli.cmd"),
+                os.path.join(appdata, "npm", "qodercli"),
+                os.path.expanduser("~/.qoder/bin/qodercli/qodercli.exe"),
+            ])
+        for p in search_paths:
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                cli_path = p
+                break
+
+    if not cli_path:
+        # Auto-install via npm
+        progress("cli_install", "Qoder CLI not found, installing via npm...")
+        try:
+            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
+            install_proc = subprocess.run(
+                [npm_cmd, "install", "-g", "@qoder-ai/qodercli"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if install_proc.returncode == 0:
+                cli_path = shutil.which("qodercli")
+                if cli_path:
+                    progress("cli_installed", f"Qoder CLI installed: {cli_path}")
+        except Exception as e:
+            debug(f"npm install error: {e}")
+
+    if not cli_path:
+        progress("cli_not_found", "Qoder CLI not found. Install: npm install -g @qoder-ai/qodercli")
+        return None, None
+
+    debug(f"Using CLI: {cli_path}")
+
+    # Remove existing auth file for fresh login
+    auth_dir = os.path.expanduser("~/.qoder/.auth")
+    auth_file = os.path.join(auth_dir, "user")
+    if os.path.exists(auth_file):
+        auth_backup = open(auth_file, "r").read()
+        os.remove(auth_file)
+        debug("Removed existing auth file for fresh login")
+
+    # Suppress CLI from opening external browser
+    cli_env = {**os.environ, "BROWSER": "echo", "DISPLAY": ""}
+
+    login_url = None
+
+    if sys.platform == "win32":
+        # Resolve .cmd wrapper to actual .exe
+        actual_exe = cli_path
+        if cli_path.lower().endswith((".cmd", ".ps1")):
+            npm_dir = os.path.dirname(cli_path)
+            exe_path = os.path.join(npm_dir, "node_modules", "@qoder-ai", "qodercli", "bin", "qodercli.exe")
+            if os.path.isfile(exe_path):
+                actual_exe = exe_path
+                debug(f"Resolved to binary: {actual_exe}")
+
+        try:
+            import threading
+            from winpty import PtyProcess
+
+            debug("Using pywinpty ConPTY")
+            pty_proc = PtyProcess.spawn(actual_exe, dimensions=(40, 500), env=cli_env)
+            _active_cli_handles["pty"] = pty_proc
+
+            # Read output in background
+            output_buffer = []
+            read_done = threading.Event()
+
+            def _reader():
+                while not read_done.is_set():
+                    try:
+                        data = pty_proc.read(4096)
+                        if data:
+                            output_buffer.append(data)
+                    except EOFError:
+                        break
+                    except Exception:
+                        if read_done.is_set():
+                            break
+                        break
+
+            reader_thread = threading.Thread(target=_reader, daemon=True)
+            reader_thread.start()
+
+            # Wait for TUI ready
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < 15:
+                await asyncio.sleep(0.5)
+                combined = "".join(output_buffer)
+                if "Not logged in" in combined or "Type your message" in combined:
+                    break
+
+            # Send /login sequence
+            await asyncio.sleep(1.0)
+            pty_proc.write("/login")
+            await asyncio.sleep(0.5)
+            pty_proc.write("\t")
+            await asyncio.sleep(0.5)
+            pty_proc.write("\r")
+            await asyncio.sleep(2.0)
+            pty_proc.write("\r")  # Select "Login with browser"
+            debug("Sent /login + Tab + Enter + Enter")
+
+            # Wait for URL
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < 40:
+                combined = "".join(output_buffer)
+                # Strip ANSI
+                clean = combined
+                while '\x1b]' in clean:
+                    si = clean.index('\x1b]')
+                    eb = clean.find('\x07', si)
+                    es = clean.find('\x1b\\', si)
+                    ends = [e for e in [eb, es] if e > si]
+                    if ends:
+                        end = min(ends)
+                        el = 1 if end == eb else 2
+                        clean = clean[:si] + clean[end + el:]
+                    else:
+                        nl = clean.find('\n', si)
+                        clean = clean[:si] + (clean[nl:] if nl > si else '')
+                clean = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
+                clean = _re.sub(r'\x1b.', '', clean)
+                clean = _re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', '', clean)
+
+                if "selectAccounts" in clean:
+                    # Wait for complete URL
+                    for _ in range(15):
+                        await asyncio.sleep(1.0)
+                        combined = "".join(output_buffer)
+                        tmp = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', combined)
+                        tmp = _re.sub(r'\x1b.', '', tmp)
+                        if 'Polling for auth' in tmp:
+                            break
+
+                    # Re-clean
+                    await asyncio.sleep(1.0)
+                    combined = "".join(output_buffer)
+                    clean = combined
+                    while '\x1b]' in clean:
+                        si = clean.index('\x1b]')
+                        eb = clean.find('\x07', si)
+                        es = clean.find('\x1b\\', si)
+                        ends = [e for e in [eb, es] if e > si]
+                        if ends:
+                            end = min(ends)
+                            el = 1 if end == eb else 2
+                            clean = clean[:si] + clean[end + el:]
+                        else:
+                            nl = clean.find('\n', si)
+                            clean = clean[:si] + (clean[nl:] if nl > si else '')
+                    clean = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
+                    clean = _re.sub(r'\x1b.', '', clean)
+                    clean = _re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', '', clean)
+
+                    # Extract URL
+                    sa_idx = clean.find('selectAccounts')
+                    if sa_idx >= 0:
+                        url_start = clean.rfind('https://', max(0, sa_idx - 200), sa_idx + 20)
+                        poll_idx = clean.find('Polling', sa_idx)
+                        if url_start >= 0:
+                            url_end = poll_idx if poll_idx > url_start else sa_idx + 500
+                            url_block = clean[url_start:url_end]
+                            url_block = _re.sub(r'\s+', '', url_block)
+                            url_block = _re.sub(r'[^a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]+$', '', url_block)
+                            login_url = url_block
+                            debug(f"Found URL ({len(login_url)} chars): {login_url[:200]}")
+                    break
+                await asyncio.sleep(1.0)
+
+            # Keep reader alive — CLI needs to keep polling
+            # Don't set read_done — let it run
+
+        except ImportError:
+            debug("pywinpty not available")
+            return None, None
+
+    else:
+        # Linux/macOS: pexpect
+        import pexpect as _pexpect
+
+        child = _pexpect.spawn(cli_path, timeout=60, encoding='utf-8', dimensions=(40, 500), env=cli_env)
+        _active_cli_handles["pexpect"] = child
+
+        try:
+            child.expect(['Not logged in', 'Type your message'], timeout=15)
+            await asyncio.sleep(1)
+            child.send('/login')
+            await asyncio.sleep(0.5)
+            child.send('\t')
+            await asyncio.sleep(0.5)
+            child.send('\r')
+            await asyncio.sleep(2)
+            child.send('\r')
+            await asyncio.sleep(3)
+
+            full_output = ""
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < 30:
+                try:
+                    chunk = child.read_nonblocking(size=4096, timeout=2)
+                    full_output += chunk
+                    if "selectAccounts" in chunk:
+                        await asyncio.sleep(2)
+                        try:
+                            full_output += child.read_nonblocking(size=8192, timeout=3)
+                        except:
+                            pass
+                        break
+                except _pexpect.TIMEOUT:
+                    continue
+                except _pexpect.EOF:
+                    break
+
+            # Extract URL
+            clean = _re.sub(r'\x1b\].*?(?:\x1b\\|\x07)', '', full_output, flags=_re.DOTALL)
+            clean = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
+            clean = _re.sub(r'\x1b[^[]?', '', clean)
+            clean = _re.sub(r'[\x00-\x09\x0b-\x1f\x7f]', '', clean)
+
+            urls = _re.findall(r'https://[^\s]*selectAccounts[^\s]*', clean)
+            if urls:
+                login_url = urls[0]
+                debug(f"Found URL: {login_url[:200]}")
+
+        except Exception as exc:
+            debug(f"pexpect error: {exc}")
+            return None, None
+
+    return login_url, _active_cli_handles
 
 
 # ---------------------------------------------------------------------------
