@@ -915,11 +915,40 @@ async def _cli_device_flow(page) -> dict | None:
                             debug(f"CLI: {line[:200]}")
 
                     if "selectAccounts" in combined_str:
-                        urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', combined_str)
-                        if urls:
-                            login_url = urls[0]
+                        # URL may be wrapped across multiple lines in terminal output
+                        # Strip ANSI codes and join continuation lines
+                        clean_for_url = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\\\?', '', combined_str)
+                        # Remove line breaks within URL (lines that continue URL params)
+                        # Join all lines between "https://qoder.com" and "client_id=..." end
+                        url_lines = []
+                        capturing_url = False
+                        for uline in clean_for_url.split('\n'):
+                            uline = uline.strip()
+                            if 'https://qoder.com/device/selectAccounts' in uline:
+                                capturing_url = True
+                                idx = uline.index('https://')
+                                url_lines.append(uline[idx:])
+                            elif capturing_url and uline and not uline.startswith(('Polling', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '⠋', 'Press', '─', '│', '╭', '╰', '?', 'Status')):
+                                url_lines.append(uline)
+                                if 'client_id=' in uline:
+                                    capturing_url = False
+                            else:
+                                if capturing_url and url_lines:
+                                    capturing_url = False
+
+                        if url_lines:
+                            login_url = ''.join(url_lines).strip()
+                            # Clean any trailing non-URL chars
+                            login_url = _re.sub(r'[\s\x1b\])"\']+$', '', login_url)
                             debug(f"Found login URL: {login_url[:200]}")
                             break
+                        else:
+                            # Fallback: try single-line regex
+                            urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', combined_str)
+                            if urls:
+                                login_url = urls[0]
+                                debug(f"Found login URL (single-line): {login_url[:200]}")
+                                break
                     await asyncio.sleep(1.0)
 
                 read_done.set()
@@ -979,11 +1008,34 @@ async def _cli_device_flow(page) -> dict | None:
                     except _pexpect.EOF:
                         break
 
-                # Extract URL
-                urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', full_output)
-                if urls:
-                    login_url = urls[0]
-                    debug(f"Found login URL: {login_url}")
+                # Extract URL — may be wrapped across multiple lines
+                clean_for_url = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\\\?', '', full_output)
+                url_lines = []
+                capturing_url = False
+                for uline in clean_for_url.split('\n'):
+                    uline = uline.strip()
+                    if 'https://qoder.com/device/selectAccounts' in uline:
+                        capturing_url = True
+                        idx = uline.index('https://')
+                        url_lines.append(uline[idx:])
+                    elif capturing_url and uline and not uline.startswith(('Polling', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '⠋', 'Press', '─', '│', '╭', '╰', '?', 'Status')):
+                        url_lines.append(uline)
+                        if 'client_id=' in uline:
+                            capturing_url = False
+                    else:
+                        if capturing_url and url_lines:
+                            capturing_url = False
+
+                if url_lines:
+                    login_url = ''.join(url_lines).strip()
+                    login_url = _re.sub(r'[\s\x1b\])"\']+$', '', login_url)
+                    debug(f"Found login URL: {login_url[:200]}")
+                else:
+                    # Fallback: single-line regex
+                    urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', full_output)
+                    if urls:
+                        login_url = urls[0]
+                        debug(f"Found login URL: {login_url}")
 
                 clean = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', full_output)
                 for line in clean.split('\n'):
