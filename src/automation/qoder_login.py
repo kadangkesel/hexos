@@ -715,6 +715,207 @@ async def _poll_device_token(nonce: str, code_verifier: str, max_wait: float = 3
     return None
 
 
+async def _cli_device_flow(page) -> dict | None:
+    """
+    Use the Qoder CLI binary to handle device flow login.
+
+    The CLI:
+    1. Generates a nonce and registers it at center.qoder.sh
+    2. Prints a login URL (since xdg-open fails on headless)
+    3. Polls center.qoder.sh/algo/api/v1/deviceToken/poll
+    4. On success, writes encrypted auth to ~/.qoder/.auth/user
+
+    We:
+    1. Spawn CLI with PTY via 'script' command
+    2. Parse the login URL from output
+    3. Have Camoufox (already authenticated) visit the URL
+    4. Wait for CLI to complete
+    5. Decrypt ~/.qoder/.auth/user to get credentials
+    """
+    import subprocess
+    import shutil
+
+    # Find qodercli binary
+    cli_path = shutil.which("qodercli")
+    if not cli_path:
+        for p in [
+            os.path.expanduser("~/.local/bin/qodercli"),
+            os.path.expanduser("~/.qoder/bin/qodercli/qodercli-0.1.47"),
+            "/usr/local/bin/qodercli",
+        ]:
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                cli_path = p
+                break
+
+    if not cli_path:
+        debug("qodercli binary not found")
+        progress("cli_not_found", "Qoder CLI not found — install with: curl -fsSL https://hexos.kadangkesel.net/install.sh | bash")
+        return None
+
+    debug(f"Using CLI: {cli_path}")
+
+    # Remove existing auth to force re-login
+    auth_dir = os.path.expanduser("~/.qoder/.auth")
+    auth_file = os.path.join(auth_dir, "user")
+    id_file = os.path.join(auth_dir, "id")
+
+    # Backup existing auth
+    auth_backup = None
+    if os.path.exists(auth_file):
+        with open(auth_file, "r") as f:
+            auth_backup = f.read()
+        os.remove(auth_file)
+        debug("Removed existing auth file for fresh login")
+
+    try:
+        # Spawn CLI with PTY using 'script' command
+        # The CLI will print the login URL when it can't open browser
+        progress("cli_spawn", "Spawning Qoder CLI for device login...")
+
+        proc = subprocess.Popen(
+            ["script", "-qc", f"echo '/login' | {cli_path}", "/dev/null"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "TERM": "dumb"},
+        )
+
+        login_url = None
+        start_time = time.monotonic()
+        output_lines = []
+
+        # Read output looking for the login URL
+        while time.monotonic() - start_time < 60:
+            try:
+                line = proc.stdout.readline()
+                if not line:
+                    if proc.poll() is not None:
+                        break
+                    await asyncio.sleep(0.1)
+                    continue
+
+                line_str = line.decode("utf-8", errors="replace").strip()
+                output_lines.append(line_str)
+                debug(f"CLI: {line_str[:200]}")
+
+                # Look for the login URL
+                if "qoder.com/device/selectAccounts" in line_str:
+                    # Extract URL from the line
+                    import re
+                    urls = re.findall(r'https://[^\s\])"\']+selectAccounts[^\s\])"\']*', line_str)
+                    if urls:
+                        login_url = urls[0]
+                        debug(f"Found login URL: {login_url}")
+                        break
+
+                # Also check for direct URL output
+                if line_str.startswith("http") and "qoder" in line_str:
+                    login_url = line_str.strip()
+                    debug(f"Found URL: {login_url}")
+                    break
+
+            except Exception as e:
+                debug(f"Read error: {e}")
+                await asyncio.sleep(0.1)
+
+        if not login_url:
+            debug(f"No login URL found in CLI output. Lines: {output_lines[-10:]}")
+            proc.kill()
+            return None
+
+        # Visit the URL with Camoufox (already authenticated)
+        progress("cli_visit", "Visiting login URL in authenticated browser...")
+        try:
+            await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3.0)
+
+            # Check if there's an account selection / approve button
+            for sel in [
+                'button:has-text("Approve")',
+                'button:has-text("Allow")',
+                'button:has-text("Authorize")',
+                'button:has-text("Confirm")',
+                '.account-item',
+                '[data-testid="account-select"]',
+            ]:
+                try:
+                    el = await page.query_selector(sel)
+                    if el and await el.is_visible():
+                        await el.click()
+                        debug(f"Clicked: {sel}")
+                        await asyncio.sleep(2.0)
+                        break
+                except Exception:
+                    continue
+
+            # Wait for CLI to complete
+            progress("cli_wait", "Waiting for CLI to complete login...")
+            for _ in range(30):
+                if proc.poll() is not None:
+                    break
+                # Check if auth file appeared
+                if os.path.exists(auth_file):
+                    debug("Auth file appeared!")
+                    await asyncio.sleep(1.0)  # Give CLI time to finish writing
+                    break
+                await asyncio.sleep(1.0)
+
+        except Exception as e:
+            debug(f"Browser visit error: {e}")
+
+        # Kill CLI if still running
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+        # Check if auth file was created
+        if not os.path.exists(auth_file) or not os.path.exists(id_file):
+            debug("Auth file not created by CLI")
+            return None
+
+        # Decrypt auth file
+        progress("cli_decrypt", "Decrypting CLI auth file...")
+        try:
+            with open(id_file, "r") as f:
+                machine_id = f.read().strip()
+            with open(auth_file, "r") as f:
+                encrypted_b64 = f.read().strip()
+
+            import base64
+            from Crypto.Cipher import AES
+
+            key = machine_id[:16].encode("utf8")
+            encrypted = base64.b64decode(encrypted_b64)
+            cipher = AES.new(key, AES.MODE_CBC, key)
+            decrypted = cipher.decrypt(encrypted)
+            pad_len = decrypted[-1]
+            if 1 <= pad_len <= 16:
+                decrypted = decrypted[:-pad_len]
+
+            data = json.loads(decrypted.decode("utf8"))
+            debug(f"Decrypted auth: uid={data.get('uid')}, token={data.get('security_oauth_token', '')[:15]}...")
+
+            return {
+                "uid": data.get("uid", ""),
+                "security_oauth_token": data.get("security_oauth_token", ""),
+                "refresh_token": data.get("refresh_token", ""),
+                "name": data.get("name", ""),
+                "email": data.get("email", ""),
+            }
+
+        except Exception as e:
+            debug(f"Auth file decrypt error: {e}")
+            return None
+
+    finally:
+        # Restore backup if login failed
+        if auth_backup and not os.path.exists(auth_file):
+            os.makedirs(auth_dir, exist_ok=True)
+            with open(auth_file, "w") as f:
+                f.write(auth_backup)
+            debug("Restored auth backup")
+
+
 # ---------------------------------------------------------------------------
 # Main login flow
 # ---------------------------------------------------------------------------
@@ -1015,120 +1216,85 @@ async def run_login(email: str, password: str):
         name = user_info.get("name", "")
         progress("user_info_ok", f"User: {email_addr or name or uid}")
 
-        # Step 8: Create Personal Access Token via browser page
-        # Use Playwright's APIRequestContext which shares browser cookies
-        progress("create_pat", "Creating personal access token...")
+        # Step 8: Use CLI binary for device flow token extraction
+        # The CLI handles nonce registration + polling at center.qoder.sh correctly.
+        # Since Camoufox is already logged in, visiting the CLI's login URL auto-approves.
+        progress("cli_login", "Starting CLI-assisted device flow...")
+
+        cli_token_result = await _cli_device_flow(page)
+
+        if cli_token_result:
+            token = cli_token_result.get("security_oauth_token", "")
+            refresh = cli_token_result.get("refresh_token", "")
+            cli_uid = cli_token_result.get("uid", uid)
+            cli_email = cli_token_result.get("email", email_addr)
+            cli_name = cli_token_result.get("name", name)
+            if token:
+                progress("token_ok", f"Token obtained via CLI device flow for {cli_email or cli_uid}")
+                result_success(token, refresh, cli_uid, cli_email, cli_name)
+                return
+
+        # Fallback: try PAT creation via browser
+        progress("create_pat", "CLI flow failed, trying PAT creation via browser...")
 
         pat_name = f"hexos-{secrets.token_hex(4)}"
         pat_token = None
 
         try:
-            # Navigate to access tokens page first to establish CSRF context
             await page.goto(f"{QODER_BASE}/account/access-tokens", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(4.0)
 
-            # Intercept ALL API responses to find CSRF token pattern
             pat_response_data = {"result": None}
-            csrf_token_found = {"value": None}
 
             async def capture_responses(response):
                 try:
                     url = response.url
-                    # Capture PAT creation response
                     if "/api/v1/me/personal-access-tokens" in url:
                         body = await response.text()
                         debug(f"PAT API [{response.request.method}] {response.status}: {body[:300]}")
                         if response.request.method == "POST" and response.status in (200, 201):
                             pat_response_data["result"] = json.loads(body)
-                        elif response.request.method == "GET" and response.status == 200:
-                            debug(f"Existing PATs: {body[:200]}")
                 except Exception:
                     pass
 
             page.on("response", capture_responses)
-
-            # Check if there are existing PATs listed
             await asyncio.sleep(2.0)
 
-            # Take screenshot for debugging
-            debug(f"Current URL: {page.url}")
-
-            # Look for "Create" button — Qoder uses Ant Design
             clicked_create = False
-            # Try button selectors first
             for sel in ['button:has-text("Create")', 'button:has-text("New")', 'button:has-text("Generate")', '.ant-btn-primary']:
                 try:
                     el = await page.query_selector(sel)
                     if el and await el.is_visible():
                         await el.click()
-                        debug(f"Clicked button: {sel}")
                         clicked_create = True
                         await asyncio.sleep(2.0)
                         break
                 except Exception:
                     continue
 
-            if not clicked_create:
-                # Try text-based
-                for text in ["Create", "New Token", "Generate", "Create Token"]:
-                    try:
-                        btn = page.get_by_role("button", name=text)
-                        if await btn.count() > 0 and await btn.is_visible():
-                            await btn.click()
-                            debug(f"Clicked button by role: '{text}'")
-                            clicked_create = True
-                            await asyncio.sleep(2.0)
-                            break
-                    except Exception:
-                        continue
-
             if clicked_create:
-                # Fill token name in modal/dialog
                 await asyncio.sleep(1.5)
-                filled = False
-                for sel in [
-                    '.ant-modal input[type="text"]',
-                    '.ant-drawer input[type="text"]',
-                    'input[placeholder*="name" i]',
-                    'input[placeholder*="token" i]',
-                    '#name',
-                    '.ant-input',
-                ]:
+                for sel in ['.ant-modal input[type="text"]', 'input[placeholder*="name" i]', '.ant-input']:
                     try:
                         inp = await page.query_selector(sel)
                         if inp and await inp.is_visible():
                             await inp.click()
                             await inp.fill(pat_name)
-                            debug(f"Filled token name in: {sel}")
-                            filled = True
-                            await asyncio.sleep(0.5)
                             break
                     except Exception:
                         continue
 
-                if not filled:
-                    debug("Could not find input for token name")
-
-                # Click OK/Create/Confirm in modal
                 await asyncio.sleep(0.5)
-                for sel in [
-                    '.ant-modal .ant-btn-primary',
-                    '.ant-drawer .ant-btn-primary',
-                    'button:has-text("OK")',
-                    'button:has-text("Create")',
-                    'button:has-text("Confirm")',
-                ]:
+                for sel in ['.ant-modal .ant-btn-primary', 'button:has-text("OK")', 'button:has-text("Create")']:
                     try:
                         el = await page.query_selector(sel)
                         if el and await el.is_visible():
                             await el.click()
-                            debug(f"Clicked confirm: {sel}")
                             await asyncio.sleep(3.0)
                             break
                     except Exception:
                         continue
 
-                # Wait for response
                 for _ in range(15):
                     if pat_response_data["result"]:
                         break
@@ -1136,75 +1302,23 @@ async def run_login(email: str, password: str):
 
             if pat_response_data["result"]:
                 data = pat_response_data["result"]
-                debug(f"PAT result keys: {list(data.keys())}")
                 pat_token = (
-                    data.get("token")
-                    or data.get("access_token")
-                    or data.get("security_oauth_token")
-                    or data.get("value")
-                    or data.get("plainTextToken")
-                    or data.get("pat")
-                    or ""
+                    data.get("token") or data.get("access_token")
+                    or data.get("security_oauth_token") or data.get("value")
+                    or data.get("plainTextToken") or data.get("pat") or ""
                 )
-                debug(f"PAT token: {pat_token[:30]}..." if pat_token else "PAT token: EMPTY")
-
-            # Also check if token is shown on the page
-            if not pat_token:
-                try:
-                    for sel in ['code', 'pre', '.token-value', '.ant-typography-copy', 'span.ant-typography']:
-                        els = await page.query_selector_all(sel)
-                        for el in els:
-                            if await el.is_visible():
-                                text_content = (await el.text_content() or "").strip()
-                                if text_content and (text_content.startswith("pat_") or text_content.startswith("dt-") or len(text_content) > 40):
-                                    pat_token = text_content
-                                    debug(f"Token from page ({sel}): {pat_token[:30]}...")
-                                    break
-                        if pat_token:
-                            break
-                except Exception:
-                    pass
 
         except Exception as exc:
             debug(f"PAT creation error: {exc}")
 
         if pat_token:
-            progress("token_ok", f"Personal access token created for {email_addr or uid}")
+            progress("token_ok", f"PAT created for {email_addr or uid}")
             result_success(pat_token, "", uid, email_addr, name)
             return
 
-        # Step 9: Fallback — try device token polling
-        progress("poll_token", "PAT creation failed, trying device token poll...")
-        poll_result = await _poll_device_token(nonce, code_verifier, max_wait=10.0)
-
-        if poll_result:
-            token = poll_result.get("security_oauth_token") or poll_result.get("token") or ""
-            refresh = poll_result.get("refresh_token") or ""
-            if token:
-                progress("token_ok", f"Device token obtained for {email_addr or uid}")
-                result_success(token, refresh, uid, email_addr, name)
-                return
-
-        # Step 10: Last resort — check cookies for token
-        progress("cookie_check", "Checking cookies for token...")
-        try:
-            context = page.context
-            cookies = await context.cookies()
-            for c in cookies:
-                if "qoder" in (c.get("domain", "") or ""):
-                    cname = c.get("name", "")
-                    cvalue = c.get("value", "")
-                    if cname in ("security_oauth_token", "token", "access_token") or cvalue.startswith("dt-"):
-                        progress("token_ok", f"Token found in cookie: {cname}")
-                        result_success(cvalue, "", uid, email_addr, name)
-                        return
-                    debug(f"Cookie: {cname}={cvalue[:40]}...")
-        except Exception as exc:
-            debug(f"Cookie scan error: {exc}")
-
         result_failure(
-            f"Logged in as {email_addr or uid} but could not create access token. "
-            "PAT creation and device polling both failed."
+            f"Logged in as {email_addr or uid} but could not extract token. "
+            "Both CLI device flow and PAT creation failed."
         )
 
     except Exception as exc:
