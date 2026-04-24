@@ -25,6 +25,7 @@ const VENV_PYTHON = process.platform === "win32"
 const LOGIN_SCRIPT = join(AUTOMATION_DIR, "login.py");
 const CLINE_LOGIN_SCRIPT = join(AUTOMATION_DIR, "cline_login.py");
 const KIRO_LOGIN_SCRIPT = join(AUTOMATION_DIR, "kiro_login.py");
+const QODER_LOGIN_SCRIPT = join(AUTOMATION_DIR, "qoder_login.py");
 
 // Track active automation subprocesses for cleanup on cancel
 export const activeProcs = new Set<{ kill: () => void }>();
@@ -602,6 +603,9 @@ export async function batchConnect(
           } else if (provider === "cline") {
             const r = await oauthClineAutomated(account.email, account.password, label, proxy, headless);
             providerResults.push({ provider: "cline", ...r });
+          } else if (provider === "qoder") {
+            const r = await oauthQoderDeviceLogin(label);
+            providerResults.push({ provider: "qoder", ...r });
           }
         }
 
@@ -1010,6 +1014,245 @@ export async function refreshKiro(refreshToken: string): Promise<{ accessToken: 
 // ---------------------------------------------------------------------------
 // Kiro: token verification (uses usage API as health check)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Qoder: device polling login (CLI-style, no browser automation needed)
+// ---------------------------------------------------------------------------
+
+/**
+ * Login to Qoder via device polling flow.
+ * Opens browser for user to login, polls for token.
+ * Token doesn't expire — valid forever until manual logout.
+ */
+export async function oauthQoderDeviceLogin(
+  label = "Qoder Account",
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Step 1: Generate nonce
+    const nonce = require("crypto").randomBytes(16).toString("hex");
+
+    // Step 2: Start device token polling
+    log.info(`[${label}] Starting Qoder device login...`);
+    const loginUrl = `https://qoder.com/device/selectAccounts?nonce=${nonce}`;
+
+    log.info(`Open this URL in your browser to login:`);
+    console.log(`\n  ${loginUrl}\n`);
+
+    // Try to open browser automatically
+    try {
+      const { default: open } = await import("open");
+      await open(loginUrl);
+    } catch {}
+
+    // Step 3: Poll for token
+    log.info("Waiting for Qoder login...");
+    const result = await _pollQoderDeviceToken(nonce);
+
+    if (!result) {
+      return { success: false, error: "Login timeout" };
+    }
+
+    // Step 4: Save connection
+    await saveConnection({
+      provider: "qoder",
+      label,
+      accessToken: result.security_oauth_token,
+      refreshToken: result.refresh_token || "",
+      uid: result.uid,
+    });
+
+    log.ok(`[${label}] Qoder connected! (${result.email || result.name || result.uid})`);
+    return { success: true };
+  } catch (e: any) {
+    log.error(`[${label}] Qoder login failed: ${e.message}`);
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Import Qoder credentials from existing CLI auth files.
+ * Reads ~/.qoder/.auth/id and ~/.qoder/.auth/user, decrypts, and saves.
+ */
+export async function importQoderFromCli(
+  authDir?: string,
+  label = "Qoder (imported)",
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const dir = authDir || path.join(homedir(), ".qoder", ".auth");
+
+    const idFile = path.join(dir, "id");
+    const userFile = path.join(dir, "user");
+
+    if (!fs.existsSync(idFile) || !fs.existsSync(userFile)) {
+      return { success: false, error: `Qoder auth files not found in ${dir}` };
+    }
+
+    const machineId = fs.readFileSync(idFile, "utf8").trim();
+    const encryptedUser = fs.readFileSync(userFile, "utf8").trim();
+
+    const { decryptAuthFile } = await import("../proxy/qoder-auth.ts");
+    const userInfo = decryptAuthFile(encryptedUser, machineId);
+
+    if (!userInfo) {
+      return { success: false, error: "Failed to decrypt Qoder auth file" };
+    }
+
+    await saveConnection({
+      provider: "qoder",
+      label,
+      accessToken: userInfo.security_oauth_token,
+      refreshToken: "",  // CLI doesn't store refresh token separately
+      uid: userInfo.uid,
+    });
+
+    log.ok(`[${label}] Qoder imported! (${userInfo.email || userInfo.uid})`);
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Poll Qoder device token endpoint.
+ */
+async function _pollQoderDeviceToken(
+  nonce: string,
+  maxWait = 120000,
+): Promise<{ uid: string; security_oauth_token: string; refresh_token: string; name: string; email: string } | null> {
+  const { generateSignature } = await import("../proxy/qoder-auth.ts");
+  const crypto = require("crypto");
+  const start = Date.now();
+  const machineToken = crypto.randomUUID().replace(/-/g, "").substring(0, 28);
+
+  while (Date.now() - start < maxWait) {
+    await Bun.sleep(1500);
+
+    try {
+      const requestId = crypto.randomUUID();
+      const bodyStr = JSON.stringify({ nonce });
+      const path = "/api/v1/deviceToken/poll";
+      const { signature, timestamp } = generateSignature("POST", path, requestId, machineToken, bodyStr);
+
+      const res = await fetch(`https://center.qoder.sh/algo${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "User-Agent": "Go-http-client/2.0",
+          "Authorization": `Signature ${signature}`,
+          "X-Client-Timestamp": timestamp,
+          "X-Request-Id": requestId,
+          "Cosy-Version": "0.1.47",
+          "Cosy-MachineToken": machineToken,
+          "Cosy-ClientType": "5",
+          "Appcode": "cosy",
+          "Login-Version": "v2",
+        },
+        body: bodyStr,
+      });
+
+      if (!res.ok) continue;
+
+      const data = await res.json() as any;
+
+      // Check if login completed
+      if (data.machineToken || data.uid || data.security_oauth_token) {
+        return {
+          uid: data.uid || "",
+          security_oauth_token: data.security_oauth_token || data.machineToken || "",
+          refresh_token: data.refresh_token || "",
+          name: data.name || "",
+          email: data.email || "",
+        };
+      }
+    } catch {
+      // Polling — ignore errors
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Qoder: token refresh
+// ---------------------------------------------------------------------------
+
+export async function refreshQoder(
+  refreshToken: string,
+  uid: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  // Qoder tokens don't expire (machineToken is permanent).
+  // If we have a refresh_token from the login flow, try it.
+  if (!refreshToken) {
+    throw new Error("Qoder: no refresh token available (tokens are permanent, re-login if needed)");
+  }
+
+  try {
+    const { generateBearerToken } = await import("../proxy/qoder-auth.ts");
+    const crypto = require("crypto");
+
+    const userInfo = {
+      uid,
+      security_oauth_token: refreshToken,
+      name: "",
+      email: "",
+    };
+
+    const path = "/api/v1/deviceToken/refresh";
+    const auth = generateBearerToken(userInfo, `/algo${path}`);
+
+    const res = await fetch(`https://center.qoder.sh/algo${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": auth.authToken,
+        "Cosy-User": auth.cosyUser,
+        "Cosy-Key": auth.cosyKey,
+        "Cosy-Date": auth.cosyDate.toString(),
+        "Cosy-Version": "0.1.47",
+        "Cosy-ClientType": "5",
+        "User-Agent": "Go-http-client/2.0",
+      },
+      body: JSON.stringify({ refreshToken }),
+    });
+
+    if (!res.ok) throw new Error(`Qoder token refresh failed: ${res.status}`);
+
+    const data = await res.json() as any;
+    return {
+      accessToken: data.security_oauth_token || data.access_token || refreshToken,
+      refreshToken: data.refresh_token || refreshToken,
+    };
+  } catch (e: any) {
+    // Qoder tokens are permanent — if refresh fails, the original token is likely still valid
+    log.warn(`Qoder token refresh failed (tokens are permanent): ${e.message}`);
+    throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Qoder: token verification
+// ---------------------------------------------------------------------------
+
+export async function checkQoderToken(
+  accessToken: string,
+  uid: string,
+): Promise<{ valid: boolean; plan?: string; isQuotaExceeded?: boolean; email?: string }> {
+  try {
+    const { checkQoderStatus } = await import("../proxy/qoder-auth.ts");
+    const userInfo = {
+      uid,
+      security_oauth_token: accessToken,
+      name: "",
+      email: "",
+    };
+    return await checkQoderStatus(userInfo);
+  } catch {
+    return { valid: false };
+  }
+}
 
 export async function checkKiroToken(accessToken: string, profileArn?: string): Promise<{ valid: boolean; suspended?: boolean; usage?: any }> {
   try {

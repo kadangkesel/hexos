@@ -1,4 +1,4 @@
-export type ProviderFormat = "openai" | "anxthxropic" | "gemini" | "kiro";
+export type ProviderFormat = "openai" | "anxthxropic" | "gemini" | "kiro" | "qoder";
 
 export interface ProviderConfig {
   id: string;
@@ -54,6 +54,20 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       "Accept": "application/vnd.amazon.eventstream",
       "X-Amz-Target": "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
       "User-Agent": "AWS-SDK-JS/3.0 kiro-ide/1.0.0",
+    },
+  },
+  qoder: {
+    id: "qoder",
+    name: "Qoder",
+    format: "qoder",
+    baseUrl: "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
+    authType: "oauth",
+    authFormat: "bearer",  // Custom auth handled in handler.ts (Bearer COSY token)
+    headers: {
+      "User-Agent": "Go-http-client/2.0",
+      "Accept": "text/event-stream",
+      "Accept-Encoding": "identity",
+      "Cache-Control": "no-cache",
     },
   },
   openai: {

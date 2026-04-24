@@ -39,6 +39,24 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "cl/minimax-m2.5:free":    { provider: "cline", model: "minimax/minimax-m2.5:free",      info: { id: "cl/minimax-m2.5:free",    name: "MiniMax M2.5 (Free)", contextWindow: 1000000 } },
   "cl/gpt-oss-120b:free":    { provider: "cline", model: "openai/gpt-oss-120b:free",       info: { id: "cl/gpt-oss-120b:free",    name: "GPT OSS 120B (Free)", contextWindow: 200000 } },
 
+  // Qoder models (prefix: qd/) — Alibaba Cloud backend
+  // Public models
+  "qd/lite":              { provider: "qoder", model: "lite",              info: { id: "qd/lite",              name: "Qoder Lite (Free)", contextWindow: 180000 } },
+  "qd/auto":              { provider: "qoder", model: "auto",              info: { id: "qd/auto",              name: "Qoder Auto", contextWindow: 180000 } },
+  "qd/efficient":         { provider: "qoder", model: "efficient",         info: { id: "qd/efficient",         name: "Qoder Efficient", contextWindow: 180000 } },
+  "qd/performance":       { provider: "qoder", model: "performance",       info: { id: "qd/performance",       name: "Qoder Performance", contextWindow: 180000 } },
+  "qd/ultimate":          { provider: "qoder", model: "ultimate",          info: { id: "qd/ultimate",          name: "Qoder Ultimate", contextWindow: 180000 } },
+  "qd/qwen3.6-plus":      { provider: "qoder", model: "qmodel",            info: { id: "qd/qwen3.6-plus",      name: "Qwen 3.6 Plus", contextWindow: 180000 } },
+  "qd/glm-5.1":           { provider: "qoder", model: "gm51model",         info: { id: "qd/glm-5.1",           name: "GLM 5.1 (Zhipu)", contextWindow: 180000 } },
+  "qd/kimi-k2.6":         { provider: "qoder", model: "kmodel",            info: { id: "qd/kimi-k2.6",         name: "Kimi K2.6 (Moonshot)", contextWindow: 180000 } },
+  "qd/minimax-m2.7":      { provider: "qoder", model: "mmodel",            info: { id: "qd/minimax-m2.7",      name: "MiniMax M2.7", contextWindow: 180000 } },
+  // Hidden models (accepted by server, not in API list)
+  "qd/opus-4":            { provider: "qoder", model: "opus-4-20250514",   info: { id: "qd/opus-4",            name: "Opus 4 (Qoder)", contextWindow: 200000 } },
+  "qd/sonnet-4":          { provider: "qoder", model: "sonnet-4-20250514", info: { id: "qd/sonnet-4",          name: "Sonnet 4 (Qoder)", contextWindow: 200000 } },
+  "qd/gpt-5":             { provider: "qoder", model: "gpt-5-0807-global", info: { id: "qd/gpt-5",             name: "GPT-5 (Qoder)", contextWindow: 200000 } },
+  "qd/gpt-4.1":           { provider: "qoder", model: "gpt-4.1",           info: { id: "qd/gpt-4.1",           name: "GPT-4.1 (Qoder)", contextWindow: 200000 } },
+  "qd/o4-mini":           { provider: "qoder", model: "o4-mini",           info: { id: "qd/o4-mini",           name: "o4-mini (Qoder)", contextWindow: 200000 } },
+
   // Kiro models (prefix: kr/) — AWS CodeWhisperer backend
   "kr/claude-sonnet-4.5":    { provider: "kiro", model: "claude-sonnet-4.5",    info: { id: "kr/claude-sonnet-4.5",    name: "Claude Sonnet 4.5 (Kiro)", contextWindow: 200000 } },
   "kr/claude-sonnet-4":      { provider: "kiro", model: "claude-sonnet-4",      info: { id: "kr/claude-sonnet-4",      name: "Claude Sonnet 4 (Kiro)", contextWindow: 200000 } },

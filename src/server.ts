@@ -466,6 +466,32 @@ export function createApp() {
       return c.json({ valid: true, uid, balance, credit: { totalCredits: balance, remainingCredits: balance } });
     }
     
+    // Qoder
+    if (conn.provider === "qoder") {
+      const { checkQoderToken } = await import("./auth/oauth.ts");
+      const qoderStatus = await checkQoderToken(conn.accessToken, conn.uid || "");
+      
+      if (!qoderStatus.valid) {
+        log.warn(`[Check] ${conn.label} (Qoder) token invalid — marking expired`);
+        await setConnectionStatus(conn.id, "expired");
+        return c.json({ valid: false, expired: true, reason: "token_invalid" });
+      }
+      
+      // Update credit info
+      const credit = {
+        totalCredits: 0,
+        remainingCredits: qoderStatus.isQuotaExceeded ? 0 : 1,
+        usedCredits: 0,
+        packageName: qoderStatus.plan || "Free",
+        expiresAt: "",
+        fetchedAt: Date.now(),
+      };
+      await updateConnection(conn.id, { credit });
+      if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+      
+      return c.json({ valid: true, plan: qoderStatus.plan, isQuotaExceeded: qoderStatus.isQuotaExceeded, credit });
+    }
+    
     // Kiro
     if (conn.provider === "kiro") {
       const kiroStatus = await checkKiroToken(conn.accessToken, conn.uid);
@@ -670,6 +696,31 @@ export function createApp() {
           status = {
             valid: true,
             credit: { totalCredits: balance, remainingCredits: balance, usedCredits: 0, packageName: "Cline", expiresAt: "" },
+          };
+        } else if (conn.provider === "qoder") {
+          // Qoder: check token + quota status
+          const { checkQoderToken } = await import("./auth/oauth.ts");
+          const qoderStatus = await checkQoderToken(conn.accessToken, conn.uid || "");
+          
+          if (!qoderStatus.valid) {
+            if (conn.status !== "expired") {
+              await setConnectionStatus(conn.id, "expired");
+              expiredCount++;
+              log.warn(`[Check credits] ${conn.label} (Qoder) token invalid — marked expired`);
+            }
+            results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
+            return;
+          }
+          
+          status = {
+            valid: true,
+            credit: {
+              totalCredits: 0,
+              remainingCredits: qoderStatus.isQuotaExceeded ? 0 : 1,
+              usedCredits: 0,
+              packageName: qoderStatus.plan || "Free",
+              expiresAt: "",
+            },
           };
         } else if (conn.provider === "kiro") {
           // Kiro: check token + fetch usage + detect suspended

@@ -7,13 +7,15 @@ import {
   updateConnection,
   type Connection,
 } from "../auth/store.ts";
-import { refreshCodebuddy, refreshCline, refreshKiro } from "../auth/oauth.ts";
+import { refreshCodebuddy, refreshCline, refreshKiro, refreshQoder } from "../auth/oauth.ts";
 import { PROVIDERS } from "../config/providers.ts";
 import { resolveModel, getUpstreamModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
 import { augmentMessages, applyRulesDeep } from "../utils/transform.ts";
 import { openaiToKiro } from "./kiro-transform.ts";
 import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
+import { buildQoderRequest, buildInferenceUrl, type QoderUserInfo } from "./qoder-auth.ts";
+import { qoderToOpenAIStream, qoderToOpenAINonStream } from "./qoder-stream.ts";
 
 // Try ALL active connections before giving up.
 // Previously capped at 3, but with 100+ accounts we want full rotation.
@@ -55,6 +57,28 @@ async function refreshCreditAfterUse(conn: Connection): Promise<void> {
       if (status.valid && status.usage) {
         await updateConnection(conn.id, { credit: { ...status.usage, fetchedAt: Date.now() } } as any);
       }
+    } else if (conn.provider === "qoder") {
+      const { checkQoderStatus } = await import("./qoder-auth.ts");
+      const userInfo = _getQoderUserInfo(conn);
+      if (userInfo) {
+        const status = await checkQoderStatus(userInfo);
+        if (status.valid) {
+          await updateConnection(conn.id, {
+            credit: {
+              totalCredits: 0,
+              remainingCredits: status.isQuotaExceeded ? 0 : 1,
+              usedCredits: 0,
+              packageName: status.plan || "Free",
+              expiresAt: status.nextResetAt ? new Date(status.nextResetAt).toISOString() : "",
+              fetchedAt: Date.now(),
+            },
+          } as any);
+          if (status.isQuotaExceeded) {
+            log.warn(`[${conn.label}] Qoder quota exceeded — marking disabled`);
+            await setConnectionStatus(conn.id, "disabled");
+          }
+        }
+      }
     }
   } catch {
     // Silent — don't let credit check errors affect the proxy
@@ -87,14 +111,15 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     return errorResponse(401, `No active connections for provider: ${providerId}. Run: hexos auth connect ${providerId}`);
   }
 
-  // Kiro uses a completely different request/response format
+  // Kiro and Qoder use completely different request/response formats
   const isKiro = providerConfig.format === "kiro";
+  const isQoder = providerConfig.format === "qoder";
 
   // Build the sanitized request body once (shared across failover attempts)
-  // For Kiro, we defer body building until we have the connection (need profileArn)
+  // For Kiro/Qoder, we defer body building until we have the connection
   let finalBodyStr: string | null = null;
   let resolvedModel = model;
-  if (!isKiro) {
+  if (!isKiro && !isQoder) {
     const built = buildUpstreamBody(body, model, stream);
     finalBodyStr = built.finalBodyStr;
     resolvedModel = built.model;
@@ -117,25 +142,53 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
 
     log.req("→", providerConfig.baseUrl, `model=${resolvedModel} account=${connLabel} (usage: ${conn.usageCount})`);
 
-    // For Kiro: build body per-connection (needs profileArn from conn.uid)
+    // For Kiro/Qoder: build body per-connection (needs connection-specific data)
     let requestBody: string;
-    if (isKiro) {
+    let requestUrl = providerConfig.baseUrl;
+    let requestHeaders: Record<string, string>;
+
+    if (isQoder) {
+      // Qoder: custom auth + body encryption
+      const userInfo = _getQoderUserInfo(conn);
+      if (!userInfo) {
+        log.error(`[${connLabel}] Missing Qoder credentials (uid/token). Skipping.`);
+        lastError = `${connLabel}: Missing Qoder credentials`;
+        continue;
+      }
+
+      // Build sanitized body first (OpenAI format)
+      const built = buildUpstreamBody(body, model, stream);
+      const bodyJson = built.finalBodyStr;
+      debugScanBody(bodyJson, resolvedModel);
+
+      // Build Qoder request with auth + encryption
+      requestUrl = buildInferenceUrl();
+      const urlPath = new URL(requestUrl).pathname;
+      const qoderReq = buildQoderRequest(userInfo, bodyJson, urlPath);
+      requestBody = qoderReq.encryptedBody;
+
+      // Set model selection header
+      requestHeaders = {
+        ...qoderReq.headers,
+        "X-Model-Key": model,
+        "X-Model-Source": "system",
+      };
+    } else if (isKiro) {
       const profileArn = conn.uid || "";
       const kiroBody = openaiToKiro(body, model, profileArn);
       requestBody = JSON.stringify(kiroBody);
       debugScanBody(requestBody, resolvedModel);
+      requestHeaders = buildHeaders(conn, providerConfig);
     } else {
       requestBody = finalBodyStr!;
       debugScanBody(requestBody, resolvedModel);
+      requestHeaders = buildHeaders(conn, providerConfig);
     }
 
-    // Build headers for this connection
-    const headers = buildHeaders(conn, providerConfig);
-
     try {
-      const res = await fetch(providerConfig.baseUrl, {
+      const res = await fetch(requestUrl, {
         method: "POST",
-        headers,
+        headers: requestHeaders,
         body: requestBody,
       });
 
@@ -148,26 +201,44 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
               ? await refreshKiro(conn.refreshToken)
               : conn.provider === "cline"
                 ? await refreshCline(conn.refreshToken)
-                : await refreshCodebuddy(conn.refreshToken);
+                : conn.provider === "qoder"
+                  ? await refreshQoder(conn.refreshToken, conn.uid || "")
+                  : await refreshCodebuddy(conn.refreshToken);
             await updateConnection(conn.id, {
               accessToken: refreshed.accessToken,
               refreshToken: refreshed.refreshToken,
             });
-            headers.Authorization = `Bearer ${refreshed.accessToken}`;
+            // Update connection token for retry
+            if (isQoder) {
+              // Qoder: rebuild entire request with new token
+              const userInfo = _getQoderUserInfo(conn);
+              if (userInfo) {
+                userInfo.security_oauth_token = refreshed.accessToken;
+                const built = buildUpstreamBody(body, model, stream);
+                const urlPath = new URL(requestUrl).pathname;
+                const qoderReq = buildQoderRequest(userInfo, built.finalBodyStr, urlPath);
+                requestBody = qoderReq.encryptedBody;
+                requestHeaders = { ...qoderReq.headers, "X-Model-Key": model, "X-Model-Source": "system" };
+              }
+            } else {
+              requestHeaders.Authorization = `Bearer ${refreshed.accessToken}`;
+            }
 
-            // Rebuild Kiro body with new token (profileArn unchanged)
-            const retryRes = await fetch(providerConfig.baseUrl, {
+            // Retry with refreshed token
+            const retryRes = await fetch(requestUrl, {
               method: "POST",
-              headers,
+              headers: requestHeaders,
               body: requestBody,
             });
 
             if (retryRes.ok || (retryRes.status >= 200 && retryRes.status < 400)) {
               await incrementUsage(conn.id);
               refreshCreditAfterUse(conn).catch(() => {});
-              // Kiro: convert EventStream → OpenAI SSE
               if (isKiro) {
                 return await handleKiroResponse(retryRes, resolvedModel, conn, startTime, stream);
+              }
+              if (isQoder) {
+                return await handleQoderResponse(retryRes, resolvedModel, conn, startTime, stream);
               }
               return addTrackingHeaders(retryRes, resolvedModel, conn, startTime);
             }
@@ -249,6 +320,11 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       // Kiro: convert EventStream binary → OpenAI SSE/JSON
       if (isKiro && res.ok) {
         return await handleKiroResponse(res, resolvedModel, conn, startTime, stream);
+      }
+
+      // Qoder: convert wrapped SSE → OpenAI SSE/JSON
+      if (isQoder && res.ok) {
+        return await handleQoderResponse(res, resolvedModel, conn, startTime, stream);
       }
 
       return addTrackingHeaders(res, resolvedModel, conn, startTime);
@@ -431,6 +507,64 @@ async function handleKiroResponse(
     log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
     return addTrackingHeaders(response, model, conn, startTime);
   }
+}
+
+/**
+ * Handle Qoder response: convert wrapped SSE to OpenAI format.
+ */
+async function handleQoderResponse(
+  res: Response,
+  model: string,
+  conn: Connection,
+  startTime: number,
+  stream: boolean,
+): Promise<Response> {
+  if (stream) {
+    const { response, usagePromise } = qoderToOpenAIStream(res, model);
+    usagePromise.then(({ promptTokens, completionTokens }) => {
+      const elapsed = Date.now() - startTime;
+      const connLabel = conn.label || conn.id.slice(0, 8);
+      log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
+    }).catch(() => {});
+    return addTrackingHeaders(response, model, conn, startTime);
+  } else {
+    const { response, promptTokens, completionTokens } = await qoderToOpenAINonStream(res, model);
+    const elapsed = Date.now() - startTime;
+    const connLabel = conn.label || conn.id.slice(0, 8);
+    log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
+    return addTrackingHeaders(response, model, conn, startTime);
+  }
+}
+
+/**
+ * Extract QoderUserInfo from a connection.
+ * Qoder stores: accessToken = security_oauth_token, uid = user UUID,
+ * label = email, refreshToken = refresh token.
+ * Additional fields (name, email) stored in uid field as JSON or separate.
+ */
+function _getQoderUserInfo(conn: Connection): QoderUserInfo | null {
+  if (!conn.accessToken || !conn.uid) return null;
+
+  // Try to parse uid as JSON (may contain extra fields)
+  let name = "";
+  let email = conn.label || "";
+  let uid = conn.uid;
+
+  try {
+    const parsed = JSON.parse(conn.uid);
+    uid = parsed.uid || conn.uid;
+    name = parsed.name || "";
+    email = parsed.email || conn.label || "";
+  } catch {
+    // uid is just a plain string UUID
+  }
+
+  return {
+    uid,
+    security_oauth_token: conn.accessToken,
+    name,
+    email,
+  };
 }
 
 /**
