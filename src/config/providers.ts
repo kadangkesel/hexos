@@ -1,4 +1,4 @@
-export type ProviderFormat = "openai" | "anxthxropic" | "gemini" | "kiro" | "qoder";
+export type ProviderFormat = "openai" | "anxthxropic" | "gemini" | "kiro" | "qoder" | "codex";
 
 export interface ProviderConfig {
   id: string;
@@ -76,5 +76,18 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     format: "openai",
     baseUrl: "https://api.openai.com/v1/chat/completions",
     authType: "apikey",
+  },
+  codex: {
+    id: "codex",
+    name: "Codex",
+    format: "codex",
+    baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+    authType: "oauth",
+    authFormat: "bearer",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "text/event-stream",
+      "User-Agent": "codex-cli/0.124.0",
+    },
   },
 };

@@ -7,7 +7,8 @@ import { log } from "./utils/logger.ts";
 import { anthropicToOpenAI, openAIToAnthropicStream } from "./proxy/anthropic.ts";
 import { augmentMessages } from "./utils/transform.ts";
 import { createUsageTrackingStream, recordUsage, startRequest, completeRequest, getStats, getRecords } from "./tracking/tracker.ts";
-import { batchConnect, isAutomationReady, checkToken, checkKiroToken } from "./auth/oauth.ts";
+import { batchConnect, isAutomationReady, checkToken, checkKiroToken, parseCodexToken } from "./auth/oauth.ts";
+import crypto from "crypto";
 import { PROVIDERS } from "./config/providers.ts";
 import { detectTools, bindTool, unbindTool, readToolConfig } from "./integration/tools.ts";
 import { getProxies, addProxy, batchAddProxies, removeProxy, removeDeadProxies, removeAllProxies, checkProxy, checkAllProxies } from "./proxy/pool.ts";
@@ -1091,6 +1092,120 @@ export function createApp() {
       return c.json({ error: result.error }, 400);
     }
     return c.json({ ok: true });
+  });
+
+  // --- Codex OAuth PKCE endpoints ---
+
+  // Generate OAuth PKCE auth URL for dashboard popup flow
+  app.get("/api/codex/auth-url", (c) => {
+    const codeVerifier = crypto.randomBytes(32).toString("base64url");
+    const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+    const state = crypto.randomBytes(16).toString("hex");
+    const redirectUri = "http://localhost:1455/auth/callback";
+
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+      redirect_uri: redirectUri,
+      scope: "openid profile email offline_access",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+      id_token_add_organizations: "true",
+      codex_cli_simplified_flow: "true",
+      originator: "codex_cli_rs",
+      state,
+    });
+
+    const authUrl = `https://auth.openai.com/oauth/authorize?${params.toString()}`;
+    return c.json({ authUrl, state, codeVerifier, redirectUri });
+  });
+
+  // Exchange auth code for tokens
+  app.post("/api/codex/exchange", async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      const { code, codeVerifier, redirectUri } = body as {
+        code?: string;
+        codeVerifier?: string;
+        redirectUri?: string;
+      };
+
+      if (!code || !codeVerifier) {
+        return c.json({ error: "code and codeVerifier are required" }, 400);
+      }
+
+      const tokenRes = await fetch("https://auth.openai.com/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+          code,
+          redirect_uri: redirectUri || "http://localhost:1455/auth/callback",
+          code_verifier: codeVerifier,
+        }).toString(),
+      });
+
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        return c.json({ error: `Token exchange failed: ${tokenRes.status}`, details: errText }, 400);
+      }
+
+      const tokens = (await tokenRes.json()) as {
+        access_token: string;
+        refresh_token?: string;
+        expires_in?: number;
+      };
+
+      const parsed = parseCodexToken(tokens.access_token);
+      const conn = await saveConnection({
+        provider: "codex",
+        label: parsed.email || "codex-user",
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        uid: parsed.userId,
+        expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined,
+      });
+
+      return c.json({
+        success: true,
+        connection: { id: conn.id, email: parsed.email, plan: parsed.planType },
+      });
+    } catch (err: any) {
+      return c.json({ error: err.message || "Token exchange failed" }, 500);
+    }
+  });
+
+  // Import Codex tokens manually
+  app.post("/api/codex/import", async (c) => {
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      const { accessToken, refreshToken, source } = body as {
+        accessToken?: string;
+        refreshToken?: string;
+        source?: string;
+      };
+
+      if (!accessToken || !refreshToken) {
+        return c.json({ error: "accessToken and refreshToken are required" }, 400);
+      }
+
+      const parsed = parseCodexToken(accessToken);
+      const conn = await saveConnection({
+        provider: "codex",
+        label: parsed.email || source || "codex-import",
+        accessToken,
+        refreshToken,
+        uid: parsed.userId,
+      });
+
+      return c.json({
+        success: true,
+        connection: { id: conn.id, email: parsed.email, plan: parsed.planType },
+      });
+    } catch (err: any) {
+      return c.json({ error: err.message || "Import failed" }, 500);
+    }
   });
 
   // --- Models ---

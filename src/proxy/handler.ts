@@ -17,6 +17,8 @@ import { openaiToKiro } from "./kiro-transform.ts";
 import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
 import { buildQoderRequest, buildInferenceUrl, type QoderUserInfo } from "./qoder-auth.ts";
 import { qoderToOpenAIStream, qoderToOpenAINonStream } from "./qoder-stream.ts";
+import { buildCodexRequestBody, createCodexStreamTransformer, extractCodexRateLimits } from "./codex-stream.ts";
+import { refreshCodex, isCodexTokenExpired } from "../auth/oauth.ts";
 import crypto from "crypto";
 
 // Try ALL active connections before giving up.
@@ -75,6 +77,9 @@ async function refreshCreditAfterUse(conn: Connection): Promise<void> {
           }
         }
       }
+    } else if (conn.provider === "codex") {
+      // Codex credit is updated from rate limit headers in handleCodexResponse
+      // Nothing extra needed here
     }
   } catch {
     // Silent — don't let credit check errors affect the proxy
@@ -107,15 +112,16 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
     return errorResponse(401, `No active connections for provider: ${providerId}. Run: hexos auth connect ${providerId}`);
   }
 
-  // Kiro and Qoder use completely different request/response formats
+  // Kiro, Qoder, and Codex use completely different request/response formats
   const isKiro = providerConfig.format === "kiro";
   const isQoder = providerConfig.format === "qoder";
+  const isCodex = providerConfig.format === "codex";
 
-  // Build the sanitized request body once (shared across failover attempts)
-  // For Kiro/Qoder, we defer body building until we have the connection
+  // Build the process request body once (shared across failover attempts)
+  // For Kiro/Qoder/Codex, we defer body building until we have the connection
   let finalBodyStr: string | null = null;
   let resolvedModel = model;
-  if (!isKiro && !isQoder) {
+  if (!isKiro && !isQoder && !isCodex) {
     const built = buildUpstreamBody(body, model, stream, providerConfig.id);
     finalBodyStr = built.finalBodyStr;
     resolvedModel = built.model;
@@ -190,6 +196,25 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       requestBody = JSON.stringify(kiroBody);
       debugScanBody(requestBody, resolvedModel);
       requestHeaders = buildHeaders(conn, providerConfig);
+    } else if (isCodex) {
+      // Codex: transform to Responses API format
+      requestBody = JSON.stringify(buildCodexRequestBody(body, model));
+      debugScanBody(requestBody, resolvedModel);
+      // Proactive token refresh if JWT is near expiry
+      if (isCodexTokenExpired(conn.accessToken)) {
+        log.info(`[${connLabel}] Codex token near expiry, refreshing proactively...`);
+        try {
+          const refreshed = await refreshCodex(conn.refreshToken!, conn.id);
+          await updateConnection(conn.id, {
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+          });
+          conn.accessToken = refreshed.accessToken;
+        } catch (e: any) {
+          log.warn(`[${connLabel}] Proactive Codex refresh failed: ${e.message}`);
+        }
+      }
+      requestHeaders = buildHeaders(conn, providerConfig);
     } else {
       requestBody = finalBodyStr!;
       debugScanBody(requestBody, resolvedModel);
@@ -214,7 +239,9 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
                 ? await refreshCline(conn.refreshToken)
                 : conn.provider === "qoder"
                   ? await refreshQoder(conn.refreshToken, conn.uid || "")
-                  : await refreshCodebuddy(conn.refreshToken);
+                  : conn.provider === "codex"
+                    ? await refreshCodex(conn.refreshToken, conn.id)
+                    : await refreshCodebuddy(conn.refreshToken);
             await updateConnection(conn.id, {
               accessToken: refreshed.accessToken,
               refreshToken: refreshed.refreshToken,
@@ -250,6 +277,9 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
               }
               if (isQoder) {
                 return await handleQoderResponse(retryRes, resolvedModel, conn, startTime, stream);
+              }
+              if (isCodex) {
+                return await handleCodexResponse(retryRes, resolvedModel, conn, startTime);
               }
               return addTrackingHeaders(retryRes, resolvedModel, conn, startTime);
             }
@@ -336,6 +366,11 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       // Qoder: convert wrapped SSE → OpenAI SSE/JSON
       if (isQoder && res.ok) {
         return await handleQoderResponse(res, resolvedModel, conn, startTime, stream);
+      }
+
+      // Codex: convert Responses API SSE → OpenAI Chat Completions SSE
+      if (isCodex && res.ok) {
+        return await handleCodexResponse(res, resolvedModel, conn, startTime);
       }
 
       return addTrackingHeaders(res, resolvedModel, conn, startTime);
@@ -545,6 +580,52 @@ async function handleQoderResponse(
     log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
     return addTrackingHeaders(response, model, conn, startTime);
   }
+}
+
+/**
+ * Handle Codex response: extract rate limits, transform Responses API SSE → OpenAI Chat Completions SSE.
+ * Codex always streams (Responses API is SSE-only).
+ */
+async function handleCodexResponse(
+  res: Response,
+  model: string,
+  conn: Connection,
+  startTime: number,
+): Promise<Response> {
+  // Extract rate limits from response headers and update connection credit info
+  const rateLimits = extractCodexRateLimits(res.headers);
+  const connLabel = conn.label || conn.id.slice(0, 8);
+  log.info(`[${connLabel}] Codex rate limits: plan=${rateLimits.planType} primary=${rateLimits.primaryUsedPercent}% secondary=${rateLimits.secondaryUsedPercent}%`);
+
+  await updateConnection(conn.id, {
+    credit: {
+      totalCredits: 100,
+      remainingCredits: 100 - rateLimits.primaryUsedPercent,
+      usedCredits: rateLimits.primaryUsedPercent,
+      packageName: `ChatGPT ${rateLimits.planType}`,
+      expiresAt: rateLimits.primaryResetAt ? new Date(rateLimits.primaryResetAt * 1000).toISOString() : "",
+      fetchedAt: Date.now(),
+    },
+  } as any);
+
+  if (!res.body) {
+    return addTrackingHeaders(res, model, conn, startTime);
+  }
+
+  // Pipe through SSE transformer: Responses API → Chat Completions format
+  const transformer = createCodexStreamTransformer(model, crypto.randomUUID());
+  const transformedStream = res.body.pipeThrough(transformer);
+
+  const response = new Response(transformedStream, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
+
+  return addTrackingHeaders(response, model, conn, startTime);
 }
 
 /**

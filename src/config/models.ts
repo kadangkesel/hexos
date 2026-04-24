@@ -61,6 +61,14 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "kr/qwen3-coder-next":     { provider: "kiro", model: "qwen3-coder-next",     info: { id: "kr/qwen3-coder-next",     name: "Qwen3 Coder Next (Kiro)", contextWindow: 131072 } },
   "kr/glm-5":                { provider: "kiro", model: "glm-5",                info: { id: "kr/glm-5",                name: "GLM 5 (Kiro)", contextWindow: 128000 } },
   "kr/minimax-m2.1":         { provider: "kiro", model: "minimax-m2.1",         info: { id: "kr/minimax-m2.1",         name: "MiniMax M2.1 (Kiro)", contextWindow: 1000000 } },
+
+  // Codex models (prefix: cx/) — ChatGPT Codex Responses API (free via ChatGPT login)
+  "cx/gpt-5.5":              { provider: "codex", model: "gpt-5.5",            info: { id: "cx/gpt-5.5",             name: "GPT-5.5 (Codex)",           contextWindow: 272000 } },
+  "cx/gpt-5.4":              { provider: "codex", model: "gpt-5.4",            info: { id: "cx/gpt-5.4",             name: "GPT-5.4 (Codex)",           contextWindow: 272000 } },
+  "cx/gpt-5.4-mini":         { provider: "codex", model: "gpt-5.4-mini",       info: { id: "cx/gpt-5.4-mini",        name: "GPT-5.4 Mini (Codex)",      contextWindow: 272000 } },
+  "cx/gpt-5.3-codex":        { provider: "codex", model: "gpt-5.3-codex",      info: { id: "cx/gpt-5.3-codex",       name: "GPT-5.3 Codex",             contextWindow: 272000 } },
+  "cx/gpt-5.2":              { provider: "codex", model: "gpt-5.2",            info: { id: "cx/gpt-5.2",             name: "GPT-5.2 (Codex)",           contextWindow: 272000 } },
+  "cx/codex-auto-review":    { provider: "codex", model: "codex-auto-review",  info: { id: "cx/codex-auto-review",   name: "Codex Auto Review (Hidden)", contextWindow: 272000 } },
 };
 
 // Anthropic model name aliases → map to CodeBuddy equivalents

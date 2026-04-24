@@ -4,6 +4,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
 import { existsSync } from "fs";
+import crypto from "crypto";
 
 const CODEBUDDY_HEADERS = {
   "Content-Type": "application/json",
@@ -1376,6 +1377,208 @@ export async function checkQoderToken(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Codex: Token refresh (ROTATING refresh tokens!)
+// ---------------------------------------------------------------------------
+
+const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_TOKEN_URL="https://auth.openai.com/oauth/token";
+
+/**
+ * Extract email and plan type from Codex access token JWT.
+ */
+export function parseCodexToken(accessToken: string): { email?: string; planType?: string; userId?: string } {
+  try {
+    const parts = accessToken.split(".");
+    if (parts.length !== 3) return {};
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+    const auth = payload["https://api.openai.com/auth"] || {};
+    const profile = payload["https://api.openai.com/profile"] || {};
+    return {
+      email: profile.email,
+      planType: auth.chatgpt_plan_type,
+      userId: auth.chatgpt_user_id,
+    };
+  } catch {
+    return {};
+  }
+}
+
+// Mutex to prevent concurrent refresh of the same rotating token
+const codexRefreshLocks = new Map<string, Promise<{ accessToken: string; refreshToken: string }>>();
+
+export async function refreshCodex(
+  refreshToken: string,
+  connectionId: string
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const existing = codexRefreshLocks.get(connectionId);
+  if (existing) {
+    log.info(`[codex] Waiting for in-progress refresh for ${connectionId}`);
+    return existing;
+  }
+
+  const refreshPromise = (async () => {
+    try {
+      const res = await fetch(CODEX_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: CODEX_CLIENT_ID,
+          refresh_token: refreshToken,
+        }),
+      });
+
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(`Codex token refresh failed (${res.status}): ${error}`);
+      }
+
+      const data = await res.json();
+      log.info(`[codex] Token refreshed successfully (expires in ${data.expires_in}s)`);
+
+      // CRITICAL: Save new rotating refresh token atomically
+      await saveConnection(connectionId, {
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token,
+      });
+
+      return { accessToken: data.access_token, refreshToken: data.refresh_token };
+    } finally {
+      codexRefreshLocks.delete(connectionId);
+    }
+  })();
+
+  codexRefreshLocks.set(connectionId, refreshPromise);
+  return refreshPromise;
+}
+
+/**
+ * Check if a Codex access token (JWT) is expired or near expiry.
+ */
+export function isCodexTokenExpired(accessToken: string, bufferSeconds = 86400): boolean {
+  try {
+    const parts = accessToken.split(".");
+    if (parts.length !== 3) return true;
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+    return !payload.exp || (payload.exp - bufferSeconds) < (Date.now() / 1000);
+  } catch {
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Codex: OAuth PKCE login (browser-based, port 1455)
+// ---------------------------------------------------------------------------
+
+export async function oauthCodexLogin(): Promise<{
+  accessToken: string;
+  refreshToken: string;
+  email: string;
+  planType: string;
+}> {
+  // Generate PKCE
+  const codeVerifier = crypto.randomBytes(32).toString("base64url");
+  const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+  const state = crypto.randomBytes(32).toString("base64url");
+
+  const CODEX_PORT = 1455;
+  const redirectUri = `http://localhost:${CODEX_PORT}/auth/callback`;
+
+  // Build auth URL
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: CODEX_CLIENT_ID,
+    redirect_uri: redirectUri,
+    scope: "openid profile email offline_access",
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+    id_token_add_organizations: "true",
+    codex_cli_simplified_flow: "true",
+    originator: "codex_cli_rs",
+    state,
+  });
+  const authUrl = `https://auth.openai.com/oauth/authorize?${params.toString()}`;
+
+  // Start local server on port 1455
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      server.stop();
+      reject(new Error("Codex OAuth timeout (5 minutes)"));
+    }, 300000);
+
+    const server = Bun.serve({
+      port: CODEX_PORT,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/auth/callback") {
+          const code = url.searchParams.get("code");
+          const returnedState = url.searchParams.get("state");
+
+          if (!code || returnedState !== state) {
+            return new Response("Invalid callback", { status: 400 });
+          }
+
+          // Exchange code for tokens
+          try {
+            const tokenRes = await fetch(CODEX_TOKEN_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({
+                grant_type: "authorization_code",
+                client_id: CODEX_CLIENT_ID,
+                code,
+                redirect_uri: redirectUri,
+                code_verifier: codeVerifier,
+              }),
+            });
+
+            if (!tokenRes.ok) {
+              throw new Error(`Token exchange failed: ${await tokenRes.text()}`);
+            }
+
+            const tokens = await tokenRes.json() as {
+              access_token: string;
+              refresh_token: string;
+              id_token: string;
+              expires_in: number;
+            };
+
+            const parsed = parseCodexToken(tokens.access_token);
+
+            clearTimeout(timeout);
+            server.stop();
+
+            resolve({
+              accessToken: tokens.access_token,
+              refreshToken: tokens.refresh_token,
+              email: parsed.email || "unknown",
+              planType: parsed.planType || "unknown",
+            });
+          } catch (err) {
+            clearTimeout(timeout);
+            server.stop();
+            reject(err);
+          }
+
+          return new Response(
+            `<html><body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0">
+              <div style="text-align:center"><h1>✓ Codex Connected</h1><p>You can close this tab.</p></div>
+              <script>setTimeout(()=>window.close(),2000)</script>
+            </body></html>`,
+            { headers: { "Content-Type": "text/html" } }
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    log.info(`[codex] OAuth server started on port ${CODEX_PORT}`);
+    log.info(`[codex] Auth URL: ${authUrl}`);
+  });
+}
+
 export async function checkKiroToken(accessToken: string, profileArn?: string): Promise<{ valid: boolean; suspended?: boolean; usage?: any }> {
   try {
     // Step 1: Check usage/quota API for token validity + credit info
@@ -1498,3 +1701,4 @@ export async function checkKiroToken(accessToken: string, profileArn?: string): 
     return { valid: false };
   }
 }
+
