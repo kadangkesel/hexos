@@ -916,8 +916,8 @@ async def _cli_device_flow(page) -> dict | None:
 
                     if "selectAccounts" in combined_str:
                         # URL may be wrapped across multiple lines in terminal output
-                        # Strip ANSI codes and join continuation lines
-                        clean_for_url = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\\\?', '', combined_str)
+                        # Strip ALL escape sequences (CSI, OSC, and other ANSI)
+                        clean_for_url = _re.sub(r'\x1b[\[\]()][^\x07\x1b]*?[\x07\x1b\\a-zA-Z]|\x1b.', '', combined_str)
                         # Remove line breaks within URL (lines that continue URL params)
                         # Join all lines between "https://qoder.com" and "client_id=..." end
                         url_lines = []
@@ -1009,7 +1009,7 @@ async def _cli_device_flow(page) -> dict | None:
                         break
 
                 # Extract URL — may be wrapped across multiple lines
-                clean_for_url = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\\\?', '', full_output)
+                clean_for_url = _re.sub(r'\x1b[\[\]()][^\x07\x1b]*?[\x07\x1b\\a-zA-Z]|\x1b.', '', full_output)
                 url_lines = []
                 capturing_url = False
                 for uline in clean_for_url.split('\n'):
