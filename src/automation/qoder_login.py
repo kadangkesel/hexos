@@ -1635,26 +1635,35 @@ async def _start_cli_and_get_url() -> tuple:
 
     # Suppress CLI from opening external browser
     # On Linux: BROWSER=echo prevents xdg-open from launching browser
-    # On Windows: Go uses rundll32/cmd start which ignores BROWSER env var
-    # We intercept by prepending a dummy dir to PATH with a no-op start.exe
+    # On Windows: Go uses "rundll32 url.dll,FileProtocolHandler <url>"
+    # We intercept by placing a dummy rundll32.exe in a temp dir prepended to PATH
     if sys.platform == "win32":
         import subprocess as _sp
-        # Create a dummy directory with a no-op "start.cmd" to intercept browser open
-        # Go's browser.OpenURL on Windows calls: cmd /c start <url>
-        # We can't easily intercept that, but we CAN set BROWSER env var
-        # which some Go browser packages check first
-        noop_bat = os.path.join(os.environ.get("TEMP", "C:\\Windows\\Temp"), "hexos_noop.bat")
+        _browser_block_dir = os.path.join(os.environ.get("TEMP", "C:\\Windows\\Temp"), "hexos_nobrowser")
+        os.makedirs(_browser_block_dir, exist_ok=True)
+        dummy_exe = os.path.join(_browser_block_dir, "rundll32.exe")
         try:
-            with open(noop_bat, "w") as f:
-                f.write("@echo off\nrem noop browser\n")
-            cli_env = {**os.environ, "BROWSER": noop_bat}
-        except Exception:
-            cli_env = {**os.environ, "BROWSER": "echo"}
-        # Note: Chrome may still open. We'll kill it after getting the URL.
-        _kill_chrome_after = True
+            if not os.path.exists(dummy_exe):
+                # Create a minimal .exe that immediately exits
+                # Use Python to compile a tiny C program via subprocess
+                # Or simpler: copy an existing harmless .exe
+                # Windows "where.exe" just prints help and exits when called wrong
+                src = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "where.exe")
+                if os.path.exists(src):
+                    import shutil
+                    shutil.copy2(src, dummy_exe)
+                    debug(f"Copied {src} -> {dummy_exe}")
+            if os.path.exists(dummy_exe):
+                new_path = _browser_block_dir + ";" + os.environ.get("PATH", "")
+                cli_env = {**os.environ, "PATH": new_path}
+                debug(f"Browser block: PATH prepended with {_browser_block_dir}")
+            else:
+                cli_env = {**os.environ}
+        except Exception as e:
+            debug(f"Failed to create dummy rundll32: {e}")
+            cli_env = {**os.environ}
     else:
         cli_env = {**os.environ, "BROWSER": "echo", "DISPLAY": ""}
-        _kill_chrome_after = False
 
     login_url = None
 
@@ -1840,20 +1849,6 @@ async def _start_cli_and_get_url() -> tuple:
         except Exception as exc:
             debug(f"pexpect error: {exc}")
             return None, None
-
-    # On Windows, try to close the Chrome tab that CLI opened
-    if _kill_chrome_after and login_url and sys.platform == "win32":
-        try:
-            import subprocess as _sp
-            # Use PowerShell to close Chrome windows that have the selectAccounts URL
-            # This is best-effort — if it fails, Chrome tab stays open but doesn't affect flow
-            _sp.run(
-                ["taskkill", "/F", "/FI", "WINDOWTITLE eq *selectAccounts*"],
-                capture_output=True, timeout=5,
-            )
-            debug("Attempted to close Chrome tab opened by CLI")
-        except Exception:
-            pass  # Best effort
 
     return login_url, _active_cli_handles
 
