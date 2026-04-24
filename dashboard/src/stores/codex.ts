@@ -48,15 +48,25 @@ export const useCodexStore = create<CodexState>((set, get) => ({
   fetchConnections: async () => {
     set({ loading: true, error: null });
     try {
-      const labels = await apiFetch<{ id: string; provider: string; label: string; status: string; email?: string; planType?: string; usageCount?: number; credit?: any }[]>("/api/connections/labels");
-      const codexConns = labels
+      // Fetch ALL pages to find codex connections (they may be on any page)
+      let allConns: any[] = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const res = await apiFetch<{ data: any[]; pagination: { totalPages: number } }>(`/api/connections?page=${page}&limit=50`);
+        allConns = allConns.concat(res.data || []);
+        totalPages = res.pagination?.totalPages || 1;
+        page++;
+      } while (page <= totalPages);
+
+      const codexConns = allConns
         .filter((c) => c.provider === "codex")
         .map((c) => ({
           id: c.id,
           label: c.label || c.email || "Codex Account",
-          email: c.email,
-          status: c.status,
-          planType: c.planType,
+          email: c.label,
+          status: c.status || "active",
+          planType: c.credit?.packageName,
           usageCount: c.usageCount,
         }));
       set({ connections: codexConns, loading: false });
