@@ -21,6 +21,10 @@ import {
   ChevronsRight,
   Search,
   Terminal,
+  Ban,
+  AlertTriangle,
+  BatteryWarning,
+  Users,
 } from "lucide-react";
 import {
   Card,
@@ -268,6 +272,7 @@ function BatchAddSection() {
   const [concurrency, setConcurrency] = useState(2);
   const [headless, setHeadless] = useState(true);
   const [providers, setProviders] = useState<string[]>(["codebuddy"]);
+  const [cancelling, setCancelling] = useState(false);
   const taskId = batchTaskId;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const toastShownRef = useRef<string | null>(null);
@@ -426,15 +431,17 @@ function BatchAddSection() {
             {isRunning ? (
               <Button
                 variant="destructive"
+                disabled={cancelling}
                 onClick={async () => {
-                  if (taskId) {
+                  if (taskId && !cancelling) {
+                    setCancelling(true);
                     await cancelBatch(taskId);
-                    fetchBatchStatus(taskId);
+                    setCancelling(false);
                   }
                 }}
               >
-                <Square className="h-4 w-4" />
-                Cancel
+                {cancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+                {cancelling ? "Cancelling..." : "Cancel"}
               </Button>
             ) : (
               <Button
@@ -488,6 +495,7 @@ function FilterUnconnectedSection() {
   const [provider, setProvider] = useState<string>("cline");
   const [concurrency, setConcurrency] = useState(2);
   const [headless, setHeadless] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
   const [allLabels, setAllLabels] = useState<{ provider: string; label: string }[]>([]);
 
   const taskId = batchTaskId;
@@ -715,10 +723,17 @@ function FilterUnconnectedSection() {
                 <Button
                   variant="destructive"
                   size="sm"
-                  onClick={() => { if (taskId) cancelBatch(taskId); }}
+                  disabled={cancelling}
+                  onClick={async () => {
+                    if (taskId && !cancelling) {
+                      setCancelling(true);
+                      await cancelBatch(taskId);
+                      setCancelling(false);
+                    }
+                  }}
                 >
-                  <Square className="h-3.5 w-3.5" />
-                  Cancel
+                  {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+                  {cancelling ? "Cancelling..." : "Cancel"}
                 </Button>
               ) : (
                 <Button
@@ -841,6 +856,14 @@ function BatchLogsSection() {
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
 
+interface AccountStats {
+  totalConnections: number;
+  activeConnections: number;
+  totalExhausted: number;
+  totalExpired: number;
+  totalBanned: number;
+}
+
 export default function AccountsPage() {
   const { connections, pagination, loading, error, fetch, fetchParams, setFetchParams, enable, disable, checkToken, checkAllCredits, removeExhausted, removeExpired, removeBanned, exportData, importData, remove } =
     useConnectionsStore();
@@ -850,11 +873,22 @@ export default function AccountsPage() {
   const [checkingCredits, setCheckingCredits] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [stats, setStats] = useState<AccountStats | null>(null);
 
-  // Fetch connections on mount (no auto credit check — manual only to avoid token invalidation on IP change)
+  // Fetch connections + stats on mount
   useEffect(() => {
     fetch();
+    import("@/lib/api").then(({ apiFetch }) =>
+      apiFetch<AccountStats>("/api/connections/credit-summary").then(setStats).catch(() => {}),
+    );
   }, [fetch]);
+
+  // Refresh stats after credit check or remove actions
+  const refreshStats = useCallback(() => {
+    import("@/lib/api").then(({ apiFetch }) =>
+      apiFetch<AccountStats>("/api/connections/credit-summary").then(setStats).catch(() => {}),
+    );
+  }, []);
 
   /* ---- pagination helpers ---- */
   const goToPage = useCallback((page: number) => {
@@ -946,6 +980,60 @@ export default function AccountsPage() {
     <>
       <PageHeader title="Accounts" subtitle="Manage connected accounts" />
 
+      {/* ---- Summary Stats ---- */}
+      {stats && (stats.totalExhausted > 0 || stats.totalBanned > 0 || stats.totalExpired > 0) && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4"
+        >
+          <Card className="border-border/50">
+            <CardContent className="flex items-center gap-3 p-4">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Users className="size-4.5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold leading-none">{stats.totalConnections}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Total</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-amber-500/30 bg-amber-500/5">
+            <CardContent className="flex items-center gap-3 p-4">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="size-4.5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold leading-none text-amber-600 dark:text-amber-400">{stats.totalExpired}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Invalid Token</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-red-500/30 bg-red-500/5">
+            <CardContent className="flex items-center gap-3 p-4">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-red-600 dark:text-red-400">
+                <Ban className="size-4.5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold leading-none text-red-600 dark:text-red-400">{stats.totalBanned}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Banned</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-destructive/30 bg-destructive/5">
+            <CardContent className="flex items-center gap-3 p-4">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+                <BatteryWarning className="size-4.5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold leading-none text-destructive">{stats.totalExhausted}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Exhausted</p>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
       {/* ---- Account List ---- */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -966,6 +1054,7 @@ export default function AccountsPage() {
                     setCheckingCredits(true);
                     await checkAllCredits();
                     setCheckingCredits(false);
+                    refreshStats();
                     toast.success("Credits updated");
                   }}
                   disabled={checkingCredits}
@@ -979,7 +1068,7 @@ export default function AccountsPage() {
                   className="border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
                   onClick={async () => {
                     const removed = await removeExpired();
-                    if (removed > 0) toast.success(`Removed ${removed} invalid token accounts`);
+                    if (removed > 0) { toast.success(`Removed ${removed} invalid token accounts`); refreshStats(); }
                     else toast("No invalid token accounts");
                   }}
                 >
@@ -992,7 +1081,7 @@ export default function AccountsPage() {
                   className="border-destructive/50 text-destructive hover:bg-destructive/10"
                   onClick={async () => {
                     const removed = await removeBanned();
-                    if (removed > 0) toast.success(`Removed ${removed} banned accounts`);
+                    if (removed > 0) { toast.success(`Removed ${removed} banned accounts`); refreshStats(); }
                     else toast("No banned accounts");
                   }}
                 >
@@ -1005,7 +1094,7 @@ export default function AccountsPage() {
                   className="border-destructive/50 text-destructive hover:bg-destructive/10"
                   onClick={async () => {
                     const removed = await removeExhausted();
-                    if (removed > 0) toast.success(`Removed ${removed} exhausted accounts`);
+                    if (removed > 0) { toast.success(`Removed ${removed} exhausted accounts`); refreshStats(); }
                     else toast("No exhausted accounts");
                   }}
                 >

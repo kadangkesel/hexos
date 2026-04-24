@@ -389,29 +389,60 @@ export function createApp() {
   // Credit summary: aggregate stats across ALL connections (not paginated)
   app.get("/api/connections/credit-summary", (c) => {
     const conns = listConnections();
-    const byProvider: Record<string, { total: number; used: number; remaining: number; count: number; active: number; exhausted: number }> = {};
+    const byProvider: Record<string, { total: number; used: number; remaining: number; count: number; active: number; exhausted: number; expired: number; banned: number }> = {};
+
+    let totalExhausted = 0;
+    let totalExpired = 0;
+    let totalBanned = 0;
 
     for (const conn of conns) {
       const p = conn.provider || "codebuddy";
-      if (!byProvider[p]) byProvider[p] = { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0 };
+      if (!byProvider[p]) byProvider[p] = { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0, expired: 0, banned: 0 };
       byProvider[p].count++;
-      if (conn.status === "active") byProvider[p].active++;
 
       const credit = conn.credit as { totalCredits?: number; usedCredits?: number; remainingCredits?: number } | undefined;
+      const rem = Number(credit?.remainingCredits ?? -1);
+
+      // Classify status matching dashboard getStatus() logic:
+      // expired → invalid token
+      // disabled + credit=0 → exhausted, disabled + credit>0 → banned
+      // active + credit=0 (with known total) → exhausted
+      // active + credit>0 → active
+      if (conn.status === "expired") {
+        byProvider[p].expired++;
+        totalExpired++;
+      } else if (conn.status === "disabled") {
+        if (rem === 0) {
+          byProvider[p].exhausted++;
+          totalExhausted++;
+        } else {
+          byProvider[p].banned++;
+          totalBanned++;
+        }
+      } else if (rem === 0 && Number(credit?.totalCredits ?? 0) > 0) {
+        // Active status but credit exhausted
+        byProvider[p].exhausted++;
+        totalExhausted++;
+      } else {
+        byProvider[p].active++;
+      }
+
       if (credit) {
-        const tot = Number(credit.totalCredits ?? 0);
-        const used = Number(credit.usedCredits ?? 0);
-        const rem = Number(credit.remainingCredits ?? 0);
-        byProvider[p].total += tot;
-        byProvider[p].used += used;
-        byProvider[p].remaining += rem;
-        if (rem === 0 && tot > 0) byProvider[p].exhausted++;
+        byProvider[p].total += Number(credit.totalCredits ?? 0);
+        byProvider[p].used += Number(credit.usedCredits ?? 0);
+        byProvider[p].remaining += Number(credit.remainingCredits ?? 0);
       }
     }
 
+    // Sum active from byProvider (already correctly classified above)
+    const totalActive = Object.values(byProvider).reduce((sum, p) => sum + p.active, 0);
+
     return c.json({
       totalConnections: conns.length,
-      activeConnections: conns.filter((c) => c.status === "active").length,
+      activeConnections: totalActive,
+      totalExhausted,
+      totalExpired,
+      totalBanned,
       byProvider,
     });
   });

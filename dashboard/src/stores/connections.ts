@@ -294,9 +294,18 @@ export const useConnectionsStore = create<ConnectionsState>()((set, get) => ({
   },
 
   cancelBatch: async (taskId) => {
+    // Optimistically mark as cancelled immediately to prevent UI spam
+    const current = get().batchTask;
+    if (current) {
+      set({ batchTask: { ...current, status: "cancelled" } });
+    }
     try {
       await apiFetch(`/api/batch-connect/${taskId}/cancel`, { method: "POST" });
     } catch {}
+    // Clear task state so isRunning becomes false
+    set({ batchTaskId: null, batchTask: null });
+    // Refresh connections list
+    get().fetch();
   },
 
   fetchBatchStatus: async (taskId) => {
