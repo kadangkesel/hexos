@@ -842,7 +842,11 @@ async def _cli_device_flow(page) -> dict | None:
                 from winpty import PtyProcess
                 debug("Using pywinpty ConPTY for TUI interaction")
 
-                pty_proc = PtyProcess.spawn(actual_exe, dimensions=(40, 500))
+                # Suppress CLI from opening external browser — we visit URL in Camoufox instead.
+                # On Linux: BROWSER=echo prevents xdg-open. On Windows: Go uses rundll32
+                # which we can't easily block, so Chrome may briefly open (harmless).
+                cli_env = {**os.environ, "BROWSER": "echo", "DISPLAY": ""}
+                pty_proc = PtyProcess.spawn(actual_exe, dimensions=(40, 500), env=cli_env)
 
                 # Read output in background thread
                 output_buffer = []
@@ -1004,7 +1008,9 @@ async def _cli_device_flow(page) -> dict | None:
             import pexpect as _pexpect
             import re as _re
 
-            child = _pexpect.spawn(cli_path, timeout=60, encoding='utf-8', dimensions=(40, 120))
+            # Suppress CLI from opening external browser
+            cli_env = {**os.environ, "BROWSER": "echo", "DISPLAY": ""}
+            child = _pexpect.spawn(cli_path, timeout=60, encoding='utf-8', dimensions=(40, 120), env=cli_env)
             _cli_proc = None
             _pty_proc = None
 
