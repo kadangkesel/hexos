@@ -1,6 +1,6 @@
 {
   "name": "hexos",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Lightweight AI API proxy with format translation and multi-provider support",
   "type": "module",
   "bin": {
