@@ -22,6 +22,26 @@ export function buildCodexRequestBody(
         ? msg.content
         : (Array.isArray(msg.content) ? msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n") : "");
       instructions += (instructions ? "\n" : "") + text;
+    } else if (msg.role === "tool") {
+      // Tool result — convert to Responses API function_call_output format
+      input.push({
+        type: "function_call_output",
+        call_id: msg.tool_call_id,
+        output: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
+      });
+    } else if (msg.role === "assistant" && msg.tool_calls) {
+      // Assistant message with tool calls — convert to function_call items
+      if (msg.content) {
+        input.push({ role: "assistant", content: msg.content });
+      }
+      for (const tc of msg.tool_calls) {
+        input.push({
+          type: "function_call",
+          id: tc.id,
+          name: tc.function?.name,
+          arguments: tc.function?.arguments || "{}",
+        });
+      }
     } else {
       input.push({
         role: msg.role === "assistant" ? "assistant" : "user",
@@ -39,9 +59,29 @@ export function buildCodexRequestBody(
 
   if (instructions) body.instructions = instructions;
   // Note: Codex Responses API does NOT support temperature, top_p, max_output_tokens, etc.
-  // Only pass: model, input, stream, store, instructions, reasoning
+  // Only pass: model, input, stream, store, instructions, reasoning, tools, tool_choice
+
   if (openaiBody.reasoning_effort) {
     body.reasoning = { effort: openaiBody.reasoning_effort };
+  }
+
+  // Convert OpenAI tools format to Responses API format
+  if (Array.isArray(openaiBody.tools) && openaiBody.tools.length > 0) {
+    body.tools = openaiBody.tools.map((t: any) => {
+      if (t.type === "function") {
+        return {
+          type: "function",
+          name: t.function?.name,
+          description: t.function?.description || "",
+          parameters: t.function?.parameters || { type: "object", properties: {} },
+        };
+      }
+      return t;
+    });
+  }
+
+  if (openaiBody.tool_choice !== undefined) {
+    body.tool_choice = openaiBody.tool_choice;
   }
 
   return body;
@@ -88,6 +128,8 @@ export function createCodexStreamTransformer(
   let buffer = "";
   let currentEvent = "";
   let usageData: { input_tokens?: number; output_tokens?: number; total_tokens?: number } | null = null;
+  // Track tool calls: Responses API sends function_call items, we accumulate and emit as OpenAI tool_calls
+  const pendingToolCalls: Map<string, { id: string; name: string; arguments: string }> = new Map();
 
   return new TransformStream({
     transform(chunk, controller) {
@@ -108,8 +150,9 @@ export function createCodexStreamTransformer(
 
         try {
           const data = JSON.parse(dataStr);
+          const evType = currentEvent || data.type || "";
 
-          if (currentEvent === "response.output_text.delta" || data.type === "response.output_text.delta") {
+          if (evType === "response.output_text.delta") {
             const chunk = {
               id: `chatcmpl-${requestId}`,
               object: "chat.completion.chunk",
@@ -118,7 +161,72 @@ export function createCodexStreamTransformer(
               choices: [{ index: 0, delta: { content: data.delta || "" }, finish_reason: null }],
             };
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-          } else if (currentEvent === "response.completed" || data.type === "response.completed") {
+
+          } else if (evType === "response.output_item.added") {
+            // Tool call started — Responses API sends {item: {type: "function_call", id, name, ...}}
+            const item = data.item;
+            if (item?.type === "function_call") {
+              pendingToolCalls.set(item.id, { id: item.id, name: item.name || "", arguments: "" });
+              // Emit initial tool_calls delta with id and function name
+              const tcChunk = {
+                id: `chatcmpl-${requestId}`,
+                object: "chat.completion.chunk",
+                created: Math.floor(Date.now() / 1000),
+                model,
+                choices: [{
+                  index: 0,
+                  delta: {
+                    tool_calls: [{
+                      index: pendingToolCalls.size - 1,
+                      id: item.id,
+                      type: "function",
+                      function: { name: item.name || "", arguments: "" },
+                    }],
+                  },
+                  finish_reason: null,
+                }],
+              };
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(tcChunk)}\n\n`));
+            }
+
+          } else if (evType === "response.custom_tool_call_input.delta") {
+            // Tool call arguments streaming
+            const callId = data.item_id;
+            const tc = callId ? pendingToolCalls.get(callId) : null;
+            if (tc && data.delta) {
+              tc.arguments += data.delta;
+              const idx = [...pendingToolCalls.keys()].indexOf(callId);
+              const argChunk = {
+                id: `chatcmpl-${requestId}`,
+                object: "chat.completion.chunk",
+                created: Math.floor(Date.now() / 1000),
+                model,
+                choices: [{
+                  index: 0,
+                  delta: {
+                    tool_calls: [{
+                      index: idx >= 0 ? idx : 0,
+                      function: { arguments: data.delta },
+                    }],
+                  },
+                  finish_reason: null,
+                }],
+              };
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(argChunk)}\n\n`));
+            }
+
+          } else if (evType === "response.output_item.done") {
+            // Tool call or message completed
+            const item = data.item;
+            if (item?.type === "function_call" && item.id) {
+              // Update final arguments
+              const tc = pendingToolCalls.get(item.id);
+              if (tc) {
+                tc.arguments = item.arguments || tc.arguments;
+              }
+            }
+
+          } else if (evType === "response.completed") {
             if (data.response?.usage) {
               usageData = {
                 input_tokens: data.response.usage.input_tokens,
@@ -126,12 +234,13 @@ export function createCodexStreamTransformer(
                 total_tokens: data.response.usage.total_tokens,
               };
             }
+            const finishReason = pendingToolCalls.size > 0 ? "tool_calls" : "stop";
             const chunk: Record<string, unknown> = {
               id: `chatcmpl-${requestId}`,
               object: "chat.completion.chunk",
               created: Math.floor(Date.now() / 1000),
               model,
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
             };
             if (usageData) {
               chunk.usage = {
@@ -142,7 +251,8 @@ export function createCodexStreamTransformer(
             }
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          } else if (currentEvent === "response.failed" || data.type === "response.failed") {
+
+          } else if (evType === "response.failed") {
             const errorMsg = data.response?.error?.message || "Unknown error";
             const errorChunk = {
               error: { message: errorMsg, type: "server_error", code: "codex_error" },
