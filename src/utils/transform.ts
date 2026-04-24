@@ -543,13 +543,23 @@ export function applyRulesDeep(obj: unknown): unknown {
  * Apply content filter rules (from filters.json) to a string.
  * These are user-configurable security/custom rules, separate from brand rules.
  */
+// Lazy-loaded filter module (avoids top-level await issue with require)
+let _filterModule: any = null;
+async function getFilterModule() {
+  if (!_filterModule) {
+    _filterModule = await import("../config/filters.ts");
+  }
+  return _filterModule;
+}
+// Pre-load on first tick so subsequent calls are sync
+getFilterModule().catch(() => {});
+
 export function applyContentFilters(text: string, provider?: string): string {
   try {
-    // Dynamic import to avoid circular deps — filters.ts is loaded lazily
-    const { isFilterEnabledForProvider, getActiveRules } = require("../config/filters.ts");
+    if (!_filterModule) return text; // Not loaded yet, skip
+    const { isFilterEnabledForProvider, getActiveRules, getFilterConfig } = _filterModule;
     if (provider && !isFilterEnabledForProvider(provider)) return text;
     if (!provider) {
-      const { getFilterConfig } = require("../config/filters.ts");
       if (!getFilterConfig().enabled) return text;
     }
     const rules = getActiveRules();
