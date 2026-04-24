@@ -50,7 +50,12 @@ program
       log.info(`Dashboard: not installed (run separately with 'cd dashboard && bun dev')`);
     }
 
-    Bun.serve({ fetch: app.fetch, port, hostname: opts.host });
+    Bun.serve({
+      fetch: app.fetch,
+      port,
+      hostname: opts.host,
+      idleTimeout: 120, // seconds — prevent timeout on large responses
+    });
   });
 
 // Auth commands

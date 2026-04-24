@@ -1,0 +1,113 @@
+"use client";
+
+import Link from "next/link";
+import { PageHeader } from "@/components/PageHeader";
+import { motion } from "motion/react";
+import {
+  Zap,
+  ChevronRight,
+  Users,
+} from "lucide-react";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { useEffect, useState } from "react";
+import { apiFetch } from "@/lib/api";
+
+interface ProviderCard {
+  id: string;
+  name: string;
+  description: string;
+  icon: React.ElementType;
+  href: string;
+  badge?: string;
+  color: string;
+}
+
+const providers: ProviderCard[] = [
+  {
+    id: "qoder",
+    name: "Qoder",
+    description: "Alibaba Cloud — Qwen, GLM, Kimi, MiniMax models. Google OAuth, CLI import, IDE import, or manual token.",
+    icon: Zap,
+    href: "/providers/qoder",
+    badge: "9 models",
+    color: "text-amber-500",
+  },
+];
+
+export default function ProvidersPage() {
+  const [counts, setCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    apiFetch<{ provider: string; label: string }[]>("/api/connections/labels")
+      .then((labels) => {
+        const map: Record<string, number> = {};
+        for (const l of labels) {
+          map[l.provider] = (map[l.provider] || 0) + 1;
+        }
+        setCounts(map);
+      })
+      .catch(() => {});
+  }, []);
+
+  return (
+    <>
+      <PageHeader
+        title="Providers"
+        subtitle="Manage provider credentials. Select a provider to configure authentication."
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {providers.map((p, i) => (
+          <motion.div
+            key={p.id}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.05 * i }}
+          >
+            <Link href={p.href} className="block group">
+              <Card className="h-full transition-colors group-hover:border-primary/50">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <p.icon className={`size-5 ${p.color}`} />
+                      {p.name}
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                      {(counts[p.id] ?? 0) > 0 && (
+                        <Badge variant="secondary" className="gap-1">
+                          <Users className="size-3" />
+                          {counts[p.id]}
+                        </Badge>
+                      )}
+                      {p.badge && (
+                        <Badge variant="outline" className="text-xs">
+                          {p.badge}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <CardDescription className="text-xs leading-relaxed">
+                    {p.description}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <span className="text-xs text-primary flex items-center gap-1 group-hover:underline">
+                    Configure
+                    <ChevronRight className="size-3" />
+                  </span>
+                </CardContent>
+              </Card>
+            </Link>
+          </motion.div>
+        ))}
+      </div>
+    </>
+  );
+}

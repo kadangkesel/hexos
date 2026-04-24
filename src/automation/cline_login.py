@@ -805,6 +805,7 @@ async def run_login(email: str, password: str):
         if parsed.password:
             proxy_cfg["password"] = parsed.password
         camoufox_kwargs["proxy"] = proxy_cfg
+        camoufox_kwargs["geoip"] = True
         progress("proxy", f"Using proxy: {parsed.hostname}:{parsed.port}")
 
     progress("browser_launch", "Launching Camoufox browser...")

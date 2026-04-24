@@ -42,9 +42,10 @@ import {
 const navItems = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/" },
   { label: "Accounts", icon: Users, href: "/accounts" },
-  { label: "Auth", icon: Zap, href: "/auth" },
+  { label: "Providers", icon: Zap, href: "/providers" },
   { label: "Models", icon: Cpu, href: "/models" },
   { label: "Logs", icon: FileText, href: "/logs" },
+  { label: "Filters", icon: Shield, href: "/filters" },
   { label: "API Key", icon: Key, href: "/api-key" },
   { label: "Integration", icon: LinkIcon, href: "/integration" },
 ];

@@ -165,7 +165,7 @@ function AccountRow({ conn, onToggle, onCheck, onRemove, busy }: AccountRowProps
         <div className="flex items-center gap-1.5">
           {conn.label ?? conn.email}
           <Badge variant="outline" className="text-[9px] font-mono shrink-0">
-            {({ codebuddy: "CB", cline: "CL", kiro: "KR" } as Record<string, string>)[String((conn as any).provider)] || String((conn as any).provider)}
+            {({ codebuddy: "CB", cline: "CL", kiro: "KR", qoder: "QD" } as Record<string, string>)[String((conn as any).provider)] || String((conn as any).provider)}
           </Badge>
         </div>
       </TableCell>
@@ -380,6 +380,7 @@ function BatchAddSection() {
               { id: "codebuddy", label: "CodeBuddy" },
               { id: "cline", label: "Cline" },
               { id: "kiro", label: "Kiro" },
+              { id: "qoder", label: "Qoder" },
             ].map((p) => (
               <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer">
                 <Checkbox
@@ -622,7 +623,7 @@ function FilterUnconnectedSection() {
           <div className="flex items-center flex-wrap gap-3">
             <Label className="text-xs text-muted-foreground shrink-0">Provider:</Label>
             <div className="flex gap-1.5">
-              {(["codebuddy", "cline", "kiro"] as string[]).map((p) => (
+              {(["codebuddy", "cline", "kiro", "qoder"] as string[]).map((p) => (
                 <Button
                   key={p}
                   variant={provider === p ? "default" : "outline"}
@@ -630,7 +631,7 @@ function FilterUnconnectedSection() {
                   className="h-7 text-xs px-3"
                   onClick={() => setProvider(p)}
                 >
-                  {p === "codebuddy" ? "CodeBuddy" : p === "cline" ? "Cline" : "Kiro"}
+                  {p === "codebuddy" ? "CodeBuddy" : p === "cline" ? "Cline" : p === "kiro" ? "Kiro" : "Qoder"}
                   <Badge variant="secondary" className="ml-1.5 text-[9px] px-1 py-0">
                     {connectedEmails.get(p)?.size ?? 0}
                   </Badge>
@@ -669,7 +670,7 @@ function FilterUnconnectedSection() {
             <div className="rounded-md border border-border overflow-hidden">
               <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b border-border">
                 <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                  Unconnected to {provider === "codebuddy" ? "CodeBuddy" : provider === "cline" ? "Cline" : "Kiro"} ({parsed.missing.length})
+                  Unconnected to {provider === "codebuddy" ? "CodeBuddy" : provider === "cline" ? "Cline" : provider === "kiro" ? "Kiro" : "Qoder"} ({parsed.missing.length})
                 </span>
               </div>
               <div className="max-h-[200px] overflow-y-auto">
@@ -1100,6 +1101,7 @@ export default function AccountsPage() {
                   <SelectItem value="codebuddy">CodeBuddy (CB)</SelectItem>
                   <SelectItem value="cline">Cline (CL)</SelectItem>
                   <SelectItem value="kiro">Kiro (KR)</SelectItem>
+                  <SelectItem value="qoder">Qoder (QD)</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={fetchParams.status || "all"} onValueChange={(v: string | null) => handleStatusFilter(!v || v === "all" ? "" : v)}>

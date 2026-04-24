@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useQoderStore } from "@/stores/qoder";
 import { PageHeader } from "@/components/PageHeader";
 import { motion } from "motion/react";
@@ -14,8 +16,10 @@ import {
   CheckCircle2,
   XCircle,
   User,
+  Users,
   Zap,
   Globe,
+  ArrowLeft,
 } from "lucide-react";
 import {
   Card,
@@ -28,9 +32,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 
-export default function QoderPage() {
+export default function QoderAuthPage() {
+  const router = useRouter();
   const {
     connections,
     loading,
@@ -40,16 +44,13 @@ export default function QoderPage() {
     addManual,
     importFromCli,
     importFromIde,
-    loginWithGoogle,
   } = useQoderStore();
 
   const [manualUid, setManualUid] = useState("");
   const [manualToken, setManualToken] = useState("");
   const [manualRefresh, setManualRefresh] = useState("");
   const [manualLabel, setManualLabel] = useState("");
-  const [googleEmail, setGoogleEmail] = useState("");
-  const [googlePassword, setGooglePassword] = useState("");
-  const [googleLabel, setGoogleLabel] = useState("");
+
   const [submitting, setSubmitting] = useState<string | null>(null);
 
   useEffect(() => {
@@ -77,29 +78,6 @@ export default function QoderPage() {
       setManualLabel("");
     } else {
       toast.error(result.error || "Failed to add account");
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    if (!googleEmail.trim() || !googlePassword.trim()) {
-      toast.error("Email and password are required");
-      return;
-    }
-    setSubmitting("google");
-    const result = await loginWithGoogle(
-      googleEmail.trim(),
-      googlePassword.trim(),
-      googleLabel.trim() || undefined,
-      true
-    );
-    setSubmitting(null);
-    if (result.ok) {
-      toast.success("Qoder account connected via Google login");
-      setGoogleEmail("");
-      setGooglePassword("");
-      setGoogleLabel("");
-    } else {
-      toast.error(result.error || "Google login failed");
     }
   };
 
@@ -131,22 +109,34 @@ export default function QoderPage() {
 
   return (
     <>
-      <PageHeader
-        title="IDE Auth"
-        subtitle="Connect IDE accounts to Hexos. Import credentials from installed IDEs or enter tokens manually."
-      />
+      {/* Back button + header */}
+      <div className="flex items-center gap-3 mb-6">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0"
+          onClick={() => router.push("/providers")}
+        >
+          <ArrowLeft className="size-4" />
+        </Button>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Zap className="size-5 text-amber-500" />
+            Qoder
+            <Badge variant="outline" className="text-xs font-normal">Alibaba Cloud</Badge>
+          </h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Connect Qoder accounts — Google OAuth, CLI import, IDE import, or manual token entry.
+          </p>
+        </div>
+      </div>
 
-      {/* Qoder Section */}
+      {/* Connected Accounts */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
+        transition={{ delay: 0.05 }}
       >
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <Zap className="size-5" />
-          Qoder
-          <Badge variant="outline" className="text-xs font-normal">Alibaba Cloud</Badge>
-        </h2>
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -216,11 +206,11 @@ export default function QoderPage() {
         </Card>
       </motion.div>
 
-      {/* Google Login */}
+      {/* Google Login — redirect to Accounts page */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
+        transition={{ delay: 0.1 }}
         className="mt-4"
       >
         <Card>
@@ -230,53 +220,13 @@ export default function QoderPage() {
               Login with Google
             </CardTitle>
             <CardDescription>
-              Automate Google OAuth login via browser automation (Camoufox). Creates a new Qoder account connection.
+              Use Batch Connect on the Accounts page to add Qoder accounts via Google OAuth browser automation.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="space-y-2">
-                <Label htmlFor="google-email">Google Email</Label>
-                <Input
-                  id="google-email"
-                  placeholder="user@gmail.com"
-                  value={googleEmail}
-                  onChange={(e) => setGoogleEmail(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="google-password">Google Password</Label>
-                <Input
-                  id="google-password"
-                  placeholder="password"
-                  type="password"
-                  value={googlePassword}
-                  onChange={(e) => setGooglePassword(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="google-label">
-                  Label{" "}
-                  <span className="text-muted-foreground">(optional)</span>
-                </Label>
-                <Input
-                  id="google-label"
-                  placeholder="my-qoder-account"
-                  value={googleLabel}
-                  onChange={(e) => setGoogleLabel(e.target.value)}
-                />
-              </div>
-            </div>
-            <Button
-              onClick={handleGoogleLogin}
-              disabled={submitting !== null || !googleEmail.trim() || !googlePassword.trim()}
-            >
-              {submitting === "google" ? (
-                <Loader2 className="size-4 animate-spin mr-2" />
-              ) : (
-                <Globe className="size-4 mr-2" />
-              )}
-              {submitting === "google" ? "Logging in..." : "Login with Google"}
+          <CardContent>
+            <Button onClick={() => router.push("/accounts")}>
+              <Users className="size-4 mr-2" />
+              Go to Accounts
             </Button>
           </CardContent>
         </Card>
@@ -286,7 +236,7 @@ export default function QoderPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+        transition={{ delay: 0.15 }}
         className="mt-4"
       >
         <h2 className="text-lg font-semibold mb-3">Import Account</h2>
@@ -352,7 +302,7 @@ export default function QoderPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
+        transition={{ delay: 0.2 }}
         className="mt-4"
       >
         <Card>
@@ -431,7 +381,7 @@ export default function QoderPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
+        transition={{ delay: 0.25 }}
         className="mt-4"
       >
         <Card>

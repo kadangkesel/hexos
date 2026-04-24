@@ -75,6 +75,7 @@ function copyToClipboard(text: string, label = "Copied") {
 function getProviderTag(id: string): string {
   if (id.startsWith("cl/")) return "Cline";
   if (id.startsWith("kr/")) return "Kiro";
+  if (id.startsWith("qd/")) return "Qoder";
   return "CodeBuddy";
 }
 
@@ -82,12 +83,14 @@ const PROVIDER_BADGE: Record<string, string> = {
   CodeBuddy: "bg-amber-500/15 text-amber-500",
   Cline: "bg-emerald-500/15 text-emerald-500",
   Kiro: "bg-sky-500/15 text-sky-500",
+  Qoder: "bg-violet-500/15 text-violet-500",
 };
 
 const PROVIDER_SHORT: Record<string, string> = {
   CodeBuddy: "CB",
   Cline: "CL",
   Kiro: "KR",
+  Qoder: "QD",
 };
 
 /* ------------------------------------------------------------------ */
@@ -121,8 +124,8 @@ function SlotSelector({
     return { value: m.id, label: m.name, provider };
   });
 
-  // Sort: CodeBuddy first, then Cline, then Kiro
-  const order = ["CodeBuddy", "Cline", "Kiro"];
+  // Sort: CodeBuddy first, then Cline, then Kiro, then Qoder
+  const order = ["CodeBuddy", "Cline", "Kiro", "Qoder"];
   options.sort((a, b) => order.indexOf(a.provider) - order.indexOf(b.provider));
 
   return (

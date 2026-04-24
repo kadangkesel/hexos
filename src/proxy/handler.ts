@@ -121,7 +121,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
   let finalBodyStr: string | null = null;
   let resolvedModel = model;
   if (!isKiro && !isQoder) {
-    const built = buildUpstreamBody(body, model, stream);
+    const built = buildUpstreamBody(body, model, stream, providerConfig.id);
     finalBodyStr = built.finalBodyStr;
     resolvedModel = built.model;
   }
@@ -158,7 +158,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       }
 
       // Build process body first (OpenAI format)
-      const built = buildUpstreamBody(body, model, stream);
+      const built = buildUpstreamBody(body, model, stream, providerConfig.id);
       let qoderBody: any;
       try { qoderBody = JSON.parse(built.finalBodyStr); } catch { qoderBody = {}; }
 
@@ -230,7 +230,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
               const userInfo = _getQoderUserInfo(conn);
               if (userInfo) {
                 userInfo.security_oauth_token = refreshed.accessToken;
-                const built = buildUpstreamBody(body, model, stream);
+                const built = buildUpstreamBody(body, model, stream, providerConfig.id);
                 const urlPath = new URL(requestUrl).pathname;
                 const qoderReq = buildQoderRequest(userInfo, built.finalBodyStr, urlPath);
                 requestBody = qoderReq.encryptedBody;
@@ -439,7 +439,7 @@ function sanitizeSchema(schema: any): any {
 /**
  * Build the sanitized upstream request body.
  */
-function buildUpstreamBody(body: any, model: string, stream: boolean): { finalBodyStr: string; model: string } {
+function buildUpstreamBody(body: any, model: string, stream: boolean, provider?: string): { finalBodyStr: string; model: string } {
   const {
     thinking,
     context_management,
@@ -482,7 +482,7 @@ function buildUpstreamBody(body: any, model: string, stream: boolean): { finalBo
     }
   }
 
-  upstreamBody.messages = augmentMessages(upstreamBody.messages);
+  upstreamBody.messages = augmentMessages(upstreamBody.messages, provider);
 
   if (Array.isArray(tools) && tools.length > 0) {
     upstreamBody.tools = sanitizeTools(tools);

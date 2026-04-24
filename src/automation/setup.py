@@ -133,6 +133,51 @@ def install_playwright_browsers():
         emit("Browser installed", "ok")
 
 
+def download_geoip_database():
+    """Download the MaxMind GeoIP database for proxy geolocation."""
+    python = get_venv_python()
+
+    emit("Downloading GeoIP database (for proxy support)...")
+    result = subprocess.run(
+        [
+            python,
+            "-c",
+            "from camoufox.locale import download_mmdb, MMDB_FILE; "
+            "download_mmdb() if not MMDB_FILE.exists() else None; "
+            "import geoip2.database; "
+            "reader = geoip2.database.Reader(str(MMDB_FILE)); "
+            "r = reader.city('8.8.8.8'); "
+            "reader.close(); "
+            "print(f'GeoIP database OK ({MMDB_FILE.stat().st_size // 1024 // 1024}MB)')",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+    if result.returncode != 0:
+        # DB exists but is corrupted — delete and re-download
+        emit("GeoIP database invalid, re-downloading...", "warn")
+        result = subprocess.run(
+            [
+                python,
+                "-c",
+                "from camoufox.locale import download_mmdb, MMDB_FILE; "
+                "MMDB_FILE.unlink(missing_ok=True); "
+                "download_mmdb(); "
+                "print('GeoIP database downloaded')",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            emit(f"GeoIP download failed (proxy geoip will not work): {result.stderr}", "warn")
+            return
+
+    emit(result.stdout.strip() or "GeoIP database ready", "ok")
+
+
 def verify_installation():
     """Verify that all dependencies are importable."""
     python = get_venv_python()
@@ -163,6 +208,7 @@ def main():
     create_venv(python_cmd)
     install_dependencies()
     install_playwright_browsers()
+    download_geoip_database()
     verify_installation()
 
     emit("=== Setup complete! ===", "ok")

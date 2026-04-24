@@ -19,8 +19,10 @@ import {
 const PAGE_LABELS: Record<string, string> = {
   "/": "Dashboard",
   "/accounts": "Accounts",
-  "/auth": "Auth",
+  "/providers": "Providers",
+  "/providers/qoder": "Qoder",
   "/models": "Models",
+  "/filters": "Filters",
   "/logs": "Logs",
   "/api-key": "API Key",
   "/integration": "Integration",
@@ -32,8 +34,19 @@ export function Navbar() {
   const { theme, toggleTheme } = useThemeStore();
   const pathname = usePathname();
 
-  const pageLabel = PAGE_LABELS[pathname] ?? pathname.replace("/", "").replace(/-/g, " ");
   const isHome = pathname === "/";
+
+  // Build breadcrumb segments for nested routes like /auth/qoder
+  const segments: { label: string; href: string }[] = [];
+  if (!isHome) {
+    const parts = pathname.split("/").filter(Boolean);
+    let accumulated = "";
+    for (const part of parts) {
+      accumulated += `/${part}`;
+      const label = PAGE_LABELS[accumulated] ?? part.charAt(0).toUpperCase() + part.slice(1).replace(/-/g, " ");
+      segments.push({ label, href: accumulated });
+    }
+  }
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
@@ -52,10 +65,20 @@ export function Navbar() {
                   Hexos
                 </BreadcrumbLink>
               </BreadcrumbItem>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                <BreadcrumbPage>{pageLabel}</BreadcrumbPage>
-              </BreadcrumbItem>
+              {segments.map((seg, i) => (
+                <span key={seg.href} className="contents">
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    {i === segments.length - 1 ? (
+                      <BreadcrumbPage>{seg.label}</BreadcrumbPage>
+                    ) : (
+                      <BreadcrumbLink render={<Link href={seg.href} />}>
+                        {seg.label}
+                      </BreadcrumbLink>
+                    )}
+                  </BreadcrumbItem>
+                </span>
+              ))}
             </>
           )}
         </BreadcrumbList>

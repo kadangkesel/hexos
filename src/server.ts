@@ -1,17 +1,18 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { validateApiKey, getApiKeys, listConnections, removeConnection, setConnectionStatus, exportData, importData, type Connection } from "./auth/store.ts";
+import { validateApiKey, getApiKeys, listConnections, removeConnection, setConnectionStatus, exportData, importData, saveConnection, type Connection } from "./auth/store.ts";
 import { proxyRequest } from "./proxy/handler.ts";
 import { listModels, resolveModel, MODEL_CATALOG } from "./config/models.ts";
 import { log } from "./utils/logger.ts";
 import { anthropicToOpenAI, openAIToAnthropicStream } from "./proxy/anthropic.ts";
 import { augmentMessages } from "./utils/transform.ts";
-import { createUsageTrackingStream, recordUsage, getStats, getRecords } from "./tracking/tracker.ts";
+import { createUsageTrackingStream, recordUsage, startRequest, completeRequest, getStats, getRecords } from "./tracking/tracker.ts";
 import { batchConnect, isAutomationReady, checkToken, checkKiroToken } from "./auth/oauth.ts";
 import { PROVIDERS } from "./config/providers.ts";
 import { detectTools, bindTool, unbindTool, readToolConfig } from "./integration/tools.ts";
 import { getProxies, addProxy, batchAddProxies, removeProxy, removeDeadProxies, removeAllProxies, checkProxy, checkAllProxies } from "./proxy/pool.ts";
 import { getSources, getScrapeStatus, startScrape, cancelScrape, integrateResults } from "./proxy/scraper.ts";
+import { getFilterConfig, setFilterEnabled, setProviderOverride, setRuleEnabled, addCustomRule, updateCustomRule, removeCustomRule } from "./config/filters.ts";
 import { join, extname } from "path";
 import { homedir } from "os";
 import { existsSync } from "fs";
@@ -118,15 +119,25 @@ export function createApp() {
     const trackAccountLabel = upstream.headers.get("X-Hexos-Account-Label") || "";
     const trackStartTime = parseInt(upstream.headers.get("X-Hexos-Start-Time") || "0") || Date.now();
 
+    const reqBodyStr = JSON.stringify(openAIBody);
+
+    // Start tracking (shows "streaming" in logs)
+    let trackingId: string | undefined;
+    if (trackAccountId) {
+      trackingId = await startRequest({
+        model: trackModel, accountId: trackAccountId, accountLabel: trackAccountLabel,
+        endpoint: "/v1/messages", streaming: true, requestBody: reqBodyStr,
+      });
+    }
+
     if (!upstream.ok || !upstream.body) {
       const text = await upstream.text();
-      if (trackAccountId) {
-        recordUsage({
-          model: trackModel, accountId: trackAccountId, accountLabel: trackAccountLabel,
-          endpoint: "/v1/messages",
+      if (trackingId) {
+        await completeRequest({
+          id: trackingId,
           promptTokens: 0, completionTokens: 0,
           status: upstream.status, latencyMs: Date.now() - trackStartTime,
-          success: false,
+          success: false, responseBody: text,
         });
       }
       return c.json({ error: { message: text, type: "proxy_error" } }, upstream.status as any);
@@ -134,15 +145,14 @@ export function createApp() {
 
     // Wrap with usage tracking before converting to Anthropic format
     const trackedUpstreamBody = createUsageTrackingStream(upstream.body, (usage) => {
-      if (trackAccountId) {
-        recordUsage({
-          model: trackModel, accountId: trackAccountId, accountLabel: trackAccountLabel,
-          endpoint: "/v1/messages",
+      if (trackingId) {
+        completeRequest({
+          id: trackingId,
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,
           status: upstream.status,
           latencyMs: Date.now() - trackStartTime,
-          success: true,
+          success: true, responseBody: usage.responseContent,
         });
       }
     });
@@ -175,8 +185,10 @@ export function createApp() {
     const modelId = body.model as string;
 
     // Upstream requires stream=true and a system message
+    const resolved = resolveModel(modelId);
+    const providerName = resolved?.provider;
     body.stream = true;
-    body.messages = augmentMessages(body.messages ?? []);
+    body.messages = augmentMessages(body.messages ?? [], providerName);
 
     log.req("POST", "/v1/chat/completions", `model=${modelId} msgs=${body.messages.length}`);
 
@@ -188,12 +200,22 @@ export function createApp() {
     const accountLabel = upstream.headers.get("X-Hexos-Account-Label") || "";
     const startTime = parseInt(upstream.headers.get("X-Hexos-Start-Time") || "0") || Date.now();
 
+    const reqBodyStr = JSON.stringify(body);
+
+    // Start tracking (shows "streaming" in logs)
+    let trackingId: string | undefined;
+    if (accountId) {
+      trackingId = await startRequest({
+        model, accountId, accountLabel,
+        endpoint: "/v1/chat/completions", streaming: true, requestBody: reqBodyStr,
+      });
+    }
+
     if (!upstream.body) {
       // Non-streaming error response — track as failed
-      if (accountId) {
-        recordUsage({
-          model, accountId, accountLabel,
-          endpoint: "/v1/chat/completions",
+      if (trackingId) {
+        await completeRequest({
+          id: trackingId,
           promptTokens: 0, completionTokens: 0,
           status: upstream.status, latencyMs: Date.now() - startTime,
           success: false,
@@ -204,15 +226,15 @@ export function createApp() {
 
     // Wrap stream with usage tracking
     const trackedStream = createUsageTrackingStream(upstream.body, (usage) => {
-      if (accountId) {
-        recordUsage({
-          model, accountId, accountLabel,
-          endpoint: "/v1/chat/completions",
+      if (trackingId) {
+        completeRequest({
+          id: trackingId,
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,
           status: upstream.status,
           latencyMs: Date.now() - startTime,
           success: upstream.status >= 200 && upstream.status < 400,
+          responseBody: usage.responseContent,
         });
       }
     });
@@ -1147,6 +1169,46 @@ export function createApp() {
     }
 
     return c.json({ range, buckets });
+  });
+
+  // --- Content Filters ---
+  app.get("/api/filters", (c) => {
+    return c.json(getFilterConfig());
+  });
+
+  app.post("/api/filters/toggle", async (c) => {
+    const { enabled } = await c.req.json() as { enabled: boolean };
+    await setFilterEnabled(enabled);
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/filters/provider", async (c) => {
+    const { provider, enabled } = await c.req.json() as { provider: string; enabled: boolean | null };
+    await setProviderOverride(provider, enabled);
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/filters/rules/:id/toggle", async (c) => {
+    const { enabled } = await c.req.json() as { enabled: boolean };
+    await setRuleEnabled(c.req.param("id"), enabled);
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/filters/rules", async (c) => {
+    const body = await c.req.json() as { label: string; pattern: string; flags?: string; replacement: string };
+    const rule = await addCustomRule(body);
+    return c.json(rule);
+  });
+
+  app.put("/api/filters/rules/:id", async (c) => {
+    const body = await c.req.json();
+    await updateCustomRule(c.req.param("id"), body);
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/filters/rules/:id", async (c) => {
+    const ok = await removeCustomRule(c.req.param("id"));
+    return c.json({ ok });
   });
 
   // --- Integration: detect tools ---

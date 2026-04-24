@@ -386,7 +386,97 @@ const TEXT_RULES: ReplacementRule[] = [
   },
 
   // =========================================================================
-  // 7. FINAL CATCH-ALL (no word boundary — last resort)
+  // 7. COMMUNITY PATTERNS (from CodeBuddy filter bypass lists)
+  // =========================================================================
+
+  {
+    label: "Advanced AI Agent → AI Assistant",
+    pattern: /Advanced AI Agent/gi,
+    replacement: "AI Assistant",
+  },
+  {
+    label: "Advanced AI orchestrator → AI orchestrator",
+    pattern: /Advanced AI orchestrator/gi,
+    replacement: "AI orchestrator",
+  },
+  {
+    label: "Advanced AI Agent with coding skills → AI coding assistant",
+    pattern: /Advanced AI Agent with coding skills/gi,
+    replacement: "AI coding assistant",
+  },
+  {
+    label: "Sisyphus-Junior task executor → task executor",
+    pattern: /Sisyphus-Junior\s*-?\s*a focused task executor/gi,
+    replacement: "task executor",
+  },
+  {
+    label: "(Oracle) → (Assistant)",
+    pattern: /\(Oracle\)/gi,
+    replacement: "(Assistant)",
+  },
+  {
+    label: "(Atlas) → (Assistant)",
+    pattern: /\(Atlas\)/gi,
+    replacement: "(Assistant)",
+  },
+  {
+    label: "Anxthxropic's → AI Provider's",
+    pattern: /Anxthxropic's/gi,
+    replacement: "AI Provider's",
+  },
+  {
+    label: "anxthxropic.com → provider.com",
+    pattern: /anxthxropic\.com/gi,
+    replacement: "provider.com",
+  },
+  {
+    label: "@anxthxropic-ai → @ai-sdk",
+    pattern: /@anxthxropic-ai/gi,
+    replacement: "@ai-sdk",
+  },
+  {
+    label: "anxthxropic → ai-provider",
+    pattern: /anxthxropic/gi,
+    replacement: "ai-provider",
+  },
+
+  // =========================================================================
+  // 8. STRIP VERBOSE SECTIONS (reduce prompt size + remove trigger content)
+  // =========================================================================
+
+  // Strip entire memory system instructions (very long, contains trigger words)
+  {
+    label: "strip auto memory section",
+    pattern: /# auto memory\n[\s\S]*?(?=\n# (?!.*memory)|$)/gi,
+    replacement: "# Memory\nPersistent memory system available.\n\n",
+  },
+  // Strip skills list (contains security-review, systematic-debugging etc)
+  {
+    label: "strip skills list reminder",
+    pattern: /<system-reminder>\nThe following skills are available[\s\S]*?<\/system-reminder>/gi,
+    replacement: "",
+  },
+  // Strip MCP server instructions
+  {
+    label: "strip MCP server instructions",
+    pattern: /<system-reminder>\n# MCP Server Instructions[\s\S]*?<\/system-reminder>/gi,
+    replacement: "",
+  },
+  // Strip context history that mentions "sensitive content warning"
+  {
+    label: "strip recent context with sensitive mentions",
+    pattern: /# \[hexos\] recent context[\s\S]*?(?=<\/system-reminder>)/gi,
+    replacement: "",
+  },
+  // Strip session-start hook content (superpowers instructions)
+  {
+    label: "strip superpowers skill content",
+    pattern: /\*\*Below is the full content of your 'superpowers:using-superpowers'[\s\S]*?<\/EXTREMELY_IMPORTANT>/gi,
+    replacement: "",
+  },
+
+  // =========================================================================
+  // 9. FINAL CATCH-ALL (no word boundary — last resort)
   // =========================================================================
   // These run last to catch substrings inside compound words, JSON keys, etc.
   {
@@ -450,12 +540,38 @@ export function applyRulesDeep(obj: unknown): unknown {
 // ---------------------------------------------------------------------------
 
 /**
+ * Apply content filter rules (from filters.json) to a string.
+ * These are user-configurable security/custom rules, separate from brand rules.
+ */
+export function applyContentFilters(text: string, provider?: string): string {
+  try {
+    // Dynamic import to avoid circular deps — filters.ts is loaded lazily
+    const { isFilterEnabledForProvider, getActiveRules } = require("../config/filters.ts");
+    if (provider && !isFilterEnabledForProvider(provider)) return text;
+    if (!provider) {
+      const { getFilterConfig } = require("../config/filters.ts");
+      if (!getFilterConfig().enabled) return text;
+    }
+    const rules = getActiveRules();
+    let result = text;
+    for (const rule of rules) {
+      result = result.replace(rule.pattern, rule.replacement);
+    }
+    return result;
+  } catch {
+    return text;
+  }
+}
+
+/**
  * Apply text replacements to an OpenAI-format messages array.
  * Modifies system, user, assistant, and tool message text content.
  * Ensures a system message always exists.
+ *
+ * @param provider - Optional provider name to check content filter overrides
  */
-export function augmentMessages(messages: any[]): any[] {
-  const result: any[] = messages.map((msg) => transformMessage(msg));
+export function augmentMessages(messages: any[], provider?: string): any[] {
+  const result: any[] = messages.map((msg) => transformMessage(msg, provider));
 
   // Guarantee there is always at least one system message
   if (!result.some((m) => m.role === "system")) {
@@ -466,9 +582,11 @@ export function augmentMessages(messages: any[]): any[] {
 }
 
 /** Transform a single OpenAI-format message. */
-function transformMessage(msg: any): any {
+function transformMessage(msg: any, provider?: string): any {
   if (typeof msg.content === "string") {
-    return { ...msg, content: applyRules(msg.content) };
+    let text = applyRules(msg.content);
+    text = applyContentFilters(text, provider);
+    return { ...msg, content: text };
   }
 
   if (Array.isArray(msg.content)) {
@@ -476,7 +594,9 @@ function transformMessage(msg: any): any {
       ...msg,
       content: msg.content.map((block: any) => {
         if (block.type === "text" && typeof block.text === "string") {
-          return { ...block, text: applyRules(block.text) };
+          let text = applyRules(block.text);
+          text = applyContentFilters(text, provider);
+          return { ...block, text };
         }
         return block;
       }),

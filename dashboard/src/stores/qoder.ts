@@ -39,10 +39,8 @@ export const useQoderStore = create<QoderState>()((set, get) => ({
   fetchConnections: async () => {
     set({ loading: true, error: null });
     try {
-      // Fetch all connections and filter for qoder
-      const res = await apiFetch<{ data: any[]; pagination: any }>("/api/connections?limit=500");
-      const qoderConns = res.data.filter((c: any) => c.provider === "qoder");
-      set({ connections: qoderConns, loading: false });
+      const res = await apiFetch<{ data: any[]; pagination: any }>("/api/connections?provider=qoder&limit=100");
+      set({ connections: res.data, loading: false });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Failed to fetch", loading: false });
     }
