@@ -5,6 +5,7 @@ import {
   recordFailure,
   setConnectionStatus,
   updateConnection,
+  initializeCredit,
   type Connection,
 } from "../auth/store.ts";
 import { refreshCodebuddy, refreshCline, refreshKiro, refreshQoder } from "../auth/oauth.ts";
@@ -25,19 +26,16 @@ const MAX_FAILOVER_ATTEMPTS = Infinity;
 /**
  * Check credit for a single connection after a successful request.
  * Runs async (fire-and-forget) so it doesn't block the response.
+ * 
+ * For Service and Kiro: uses local credit tracking (initializeCredit only).
+ * Actual deduction happens in server.ts when token counts are known from the SSE stream.
+ * For Cline and Qoder: keeps upstream API checks (they work reliably).
  */
 async function refreshCreditAfterUse(conn: Connection): Promise<void> {
   try {
-    if (conn.provider === "codebuddy") {
-      const { checkServiceCredit } = await import("../auth/oauth.ts");
-      const credit = await checkServiceCredit(conn.accessToken, conn.uid, (conn as any).webCookie);
-      if (credit) {
-        await updateConnection(conn.id, { credit: { ...credit, fetchedAt: Date.now() } } as any);
-        if (credit.remainingCredits === 0) {
-          log.warn(`[${conn.label}] Credit exhausted after use — marking disabled`);
-          await setConnectionStatus(conn.id, "disabled");
-        }
-      }
+    if (conn.provider === "Service") {
+      // Local credit tracking — just ensure credit is initialized
+      await initializeCredit(conn.id, conn.provider);
     } else if (conn.provider === "cline") {
       const uid = conn.uid;
       if (uid) {
@@ -53,11 +51,8 @@ async function refreshCreditAfterUse(conn: Connection): Promise<void> {
         }
       }
     } else if (conn.provider === "kiro") {
-      const { checkKiroToken } = await import("../auth/oauth.ts");
-      const status = await checkKiroToken(conn.accessToken, conn.uid);
-      if (status.valid && status.usage) {
-        await updateConnection(conn.id, { credit: { ...status.usage, fetchedAt: Date.now() } } as any);
-      }
+      // Local credit tracking — just ensure credit is initialized
+      await initializeCredit(conn.id, conn.provider);
     } else if (conn.provider === "qoder") {
       const { checkQoderStatus } = await import("./qoder-auth.ts");
       const userInfo = _getQoderUserInfo(conn);

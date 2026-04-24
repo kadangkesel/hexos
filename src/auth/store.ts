@@ -207,6 +207,88 @@ export function listConnections() {
   return db.data.connections;
 }
 
+// Default credits for providers that use local credit tracking
+// (upstream credit APIs are unreliable for these providers)
+export const DEFAULT_CREDITS: Record<string, { totalCredits: number; packageName: string }> = {
+  Service: { totalCredits: 250, packageName: "Free" },
+  kiro: { totalCredits: 550, packageName: "KIRO FREE" },
+};
+
+/**
+ * Initialize credit for a connection if it has no credit info and the provider
+ * uses local credit tracking (Service, kiro). Does NOT overwrite existing credit data.
+ */
+export async function initializeCredit(connectionId: string, provider: string): Promise<void> {
+  const defaults = DEFAULT_CREDITS[provider];
+  if (!defaults) return; // Provider not tracked locally
+
+  const idx = db.data.connections.findIndex((c) => c.id === connectionId);
+  if (idx < 0) return;
+
+  // Don't overwrite existing credit data
+  if (db.data.connections[idx].credit) return;
+
+  db.data.connections[idx].credit = {
+    totalCredits: defaults.totalCredits,
+    remainingCredits: defaults.totalCredits,
+    usedCredits: 0,
+    packageName: defaults.packageName,
+    expiresAt: "",
+    fetchedAt: Date.now(),
+  };
+  await db.write();
+}
+
+/**
+ * Deduct credit from a connection based on actual token usage.
+ * Cost formula: totalTokens / 1000 (1 credit ≈ 1000 tokens).
+ * If remainingCredits <= 0, marks the connection as disabled.
+ */
+export async function deductCredit(
+  connectionId: string,
+  tokens: { promptTokens: number; completionTokens: number },
+): Promise<CreditInfo | null> {
+  const idx = db.data.connections.findIndex((c) => c.id === connectionId);
+  if (idx < 0) return null;
+
+  const conn = db.data.connections[idx];
+
+  // Only deduct for providers with local credit tracking
+  if (!DEFAULT_CREDITS[conn.provider]) return null;
+
+  // Initialize credit if missing
+  if (!conn.credit) {
+    const defaults = DEFAULT_CREDITS[conn.provider];
+    conn.credit = {
+      totalCredits: defaults.totalCredits,
+      remainingCredits: defaults.totalCredits,
+      usedCredits: 0,
+      packageName: defaults.packageName,
+      expiresAt: "",
+      fetchedAt: Date.now(),
+    };
+  }
+
+  const totalTokens = tokens.promptTokens + tokens.completionTokens;
+  const cost = totalTokens / 1000;
+
+  conn.credit.usedCredits += cost;
+  conn.credit.remainingCredits = conn.credit.totalCredits - conn.credit.usedCredits;
+  conn.credit.fetchedAt = Date.now();
+
+  // Clamp to 0 for UI display — do NOT auto-disable here.
+  // Disabling only happens when the upstream API responds with exhausted/quota errors (429).
+  // Local token counting may be inaccurate, so it's only used for UI progress display.
+  if (conn.credit.remainingCredits < 0) {
+    conn.credit.remainingCredits = 0;
+  }
+
+  await db.write();
+  return conn.credit;
+}
+
+
+
 /** Export connections only (no API keys - those are per-device). */
 export function exportData(): { connections: Connection[] } {
   return { connections: [...db.data.connections] };

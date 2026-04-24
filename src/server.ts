@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { validateApiKey, getApiKeys, listConnections, removeConnection, setConnectionStatus, exportData, importData, saveConnection, type Connection } from "./auth/store.ts";
+import { validateApiKey, getApiKeys, listConnections, removeConnection, setConnectionStatus, exportData, importData, saveConnection, deductCredit, type Connection } from "./auth/store.ts";
 import { proxyRequest } from "./proxy/handler.ts";
 import { listModels, resolveModel, MODEL_CATALOG } from "./config/models.ts";
 import { log } from "./utils/logger.ts";
@@ -143,7 +143,7 @@ export function createApp() {
       return c.json({ error: { message: text, type: "proxy_error" } }, upstream.status as any);
     }
 
-    // Wrap with usage tracking before converting to Anthropic format
+    // Wrap with usage tracking before converting to AI Provider format
     const trackedUpstreamBody = createUsageTrackingStream(upstream.body, (usage) => {
       if (trackingId) {
         completeRequest({
@@ -154,6 +154,10 @@ export function createApp() {
           latencyMs: Date.now() - trackStartTime,
           success: true, responseBody: usage.responseContent,
         });
+      }
+      // Deduct local credit for Service/Kiro based on actual token usage
+      if (trackAccountId) {
+        deductCredit(trackAccountId, { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }).catch(() => {});
       }
     });
 
@@ -237,9 +241,13 @@ export function createApp() {
           responseBody: usage.responseContent,
         });
       }
+      // Deduct local credit for Service/Kiro based on actual token usage
+      if (accountId) {
+        deductCredit(accountId, { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }).catch(() => {});
+      }
     });
 
-    // Always stream (CodeBuddy requirement)
+    // Always stream (Service requirement)
     return new Response(trackedStream, {
       status: upstream.status,
       headers: {
