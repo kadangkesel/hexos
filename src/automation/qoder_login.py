@@ -1105,6 +1105,14 @@ async def _cli_device_flow(page) -> dict | None:
         try:
             await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3.0)
+            
+            current_url = page.url
+            debug(f"After visiting CLI URL: {current_url[:200]}")
+            try:
+                page_text = await page.inner_text('body')
+                debug(f"Page text: {page_text[:300]}")
+            except Exception:
+                pass
 
             # Check if there's an account selection / approve button
             for sel in [
