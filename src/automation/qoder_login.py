@@ -817,8 +817,11 @@ async def _cli_device_flow(page) -> dict | None:
         debug("Removed existing auth file for fresh login")
 
     try:
-        # Spawn CLI — need to handle TUI (Bubble Tea) which reads from terminal directly
+        # Spawn CLI — use pexpect for reliable TUI interaction
         progress("cli_spawn", "Spawning Qoder CLI for device login...")
+
+        login_url = None
+        output_lines = []
 
         if sys.platform == "win32":
             # Windows: resolve .cmd/.ps1 wrapper to actual .exe binary
@@ -830,195 +833,129 @@ async def _cli_device_flow(page) -> dict | None:
                     actual_exe = exe_path
                     debug(f"Resolved to actual binary: {actual_exe}")
 
-            # Use conpty/winpty via powershell to provide a real PTY
-            # PowerShell can pipe input to interactive programs
-            ps_script = (
-                f'$process = Start-Process -FilePath "{actual_exe}" '
-                f'-NoNewWindow -PassThru -RedirectStandardInput NUL; '
-                f'Start-Sleep -Seconds 3; '
-                f'# Send /login via SendKeys or stdin is not possible with TUI; '
-                f'# Instead, use the -p flag approach'
-            )
-            # Actually, the simplest approach: use -p flag which bypasses TUI
-            # But -p requires login first... 
-            # 
-            # Real fix: use 'expect' equivalent — write to stdin with ConPTY
-            # On Windows, use winpty or just write raw bytes to stdin pipe
-            # Bubble Tea on Windows reads from os.Stdin which IS the pipe when
-            # stdin is redirected. The issue is timing — TUI needs to initialize first.
-            
-            import ctypes
-            proc = subprocess.Popen(
-                [actual_exe],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env={**os.environ},
-                creationflags=0,  # No special flags — let stdin pipe work
-            )
-            
-            # Wait for TUI to initialize, then send /login command
-            # Read output until we see "Not logged in" or the input prompt
-            login_sent = False
-            start_time = time.monotonic()
-            output_lines = []
-            login_url = None
-            
-            while time.monotonic() - start_time < 90:
+            # Windows: use wexpect (pexpect for Windows) or subprocess with ConPTY
+            try:
+                import wexpect
+                child = wexpect.spawn(actual_exe, timeout=60)
+            except ImportError:
+                # Fallback: use subprocess with stdin pipe
+                debug("wexpect not available, using subprocess stdin pipe")
+                proc = subprocess.Popen(
+                    [actual_exe],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    env={**os.environ},
+                )
+                # Wait for TUI, then send /login
+                await asyncio.sleep(5)
                 try:
-                    # Non-blocking read with timeout
-                    import select
-                    # On Windows, select doesn't work on pipes. Use threading.
-                    if not login_sent:
-                        # Read available output
-                        line = b""
-                        try:
-                            # Try to read a line (may block)
-                            import threading
-                            result_holder = [None]
-                            def read_line():
-                                try:
-                                    result_holder[0] = proc.stdout.readline()
-                                except:
-                                    pass
-                            t = threading.Thread(target=read_line, daemon=True)
-                            t.start()
-                            t.join(timeout=2.0)
-                            line = result_holder[0] or b""
-                        except:
-                            line = b""
-                        
-                        if line:
-                            line_str = line.decode("utf-8", errors="replace").strip()
-                            # Strip ANSI escape codes for matching
-                            import re
-                            clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', line_str).strip()
-                            if clean:
-                                output_lines.append(clean)
-                                debug(f"CLI: {clean[:200]}")
-                            
-                            # Detect TUI ready — look for "Not logged in" or input prompt
-                            if "not logged in" in clean.lower() or "login" in clean.lower() or "> Type your" in clean:
-                                if not login_sent:
-                                    debug("TUI ready, sending /login command...")
-                                    await asyncio.sleep(1.0)
-                                    try:
-                                        proc.stdin.write(b"/login\r\n")
-                                        proc.stdin.flush()
-                                        login_sent = True
-                                        debug("/login command sent to stdin")
-                                    except Exception as e:
-                                        debug(f"stdin write error: {e}")
-                                        # Fallback: try writing /login\n
-                                        try:
-                                            proc.stdin.write(b"/login\n")
-                                            proc.stdin.flush()
-                                            login_sent = True
-                                        except:
-                                            pass
-                        else:
-                            await asyncio.sleep(0.2)
-                            # If no output for a while and login not sent, try sending anyway
-                            if not login_sent and time.monotonic() - start_time > 5:
-                                debug("No prompt detected after 5s, sending /login anyway...")
-                                try:
-                                    proc.stdin.write(b"/login\r\n")
-                                    proc.stdin.flush()
-                                    login_sent = True
-                                except:
-                                    pass
-                    else:
-                        # Login sent, now look for the URL
-                        line = b""
-                        try:
-                            import threading
-                            result_holder = [None]
-                            def read_line2():
-                                try:
-                                    result_holder[0] = proc.stdout.readline()
-                                except:
-                                    pass
-                            t = threading.Thread(target=read_line2, daemon=True)
-                            t.start()
-                            t.join(timeout=2.0)
-                            line = result_holder[0] or b""
-                        except:
-                            line = b""
-                        
-                        if line:
-                            line_str = line.decode("utf-8", errors="replace").strip()
-                            import re
-                            clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', line_str).strip()
-                            if clean:
-                                output_lines.append(clean)
-                                debug(f"CLI: {clean[:200]}")
-                            
-                            # Look for login URL
-                            if "qoder.com/device/selectAccounts" in line_str or "qoder.com/device/selectAccounts" in clean:
-                                urls = re.findall(r'https://[^\s\])"\']+selectAccounts[^\s\])"\']*', line_str + " " + clean)
-                                if urls:
-                                    login_url = urls[0]
-                                    debug(f"Found login URL: {login_url}")
-                                    break
-                            if line_str.startswith("http") and "qoder" in line_str:
-                                login_url = line_str.strip()
-                                break
-                        else:
-                            await asyncio.sleep(0.3)
-                            
+                    proc.stdin.write(b"/login\r\n")
+                    proc.stdin.flush()
+                    await asyncio.sleep(2)
+                    proc.stdin.write(b"\r\n")  # Select "Login with browser"
+                    proc.stdin.flush()
                 except Exception as e:
-                    debug(f"Read error: {e}")
-                    await asyncio.sleep(0.2)
+                    debug(f"stdin write error: {e}")
 
+                # Read output for URL
+                import threading, re as _re
+                start_time = time.monotonic()
+                while time.monotonic() - start_time < 40:
+                    result_holder = [None]
+                    def _read():
+                        try: result_holder[0] = proc.stdout.readline()
+                        except: pass
+                    t = threading.Thread(target=_read, daemon=True)
+                    t.start()
+                    t.join(timeout=2.0)
+                    line = result_holder[0] or b""
+                    if line:
+                        line_str = line.decode("utf-8", errors="replace")
+                        clean = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', line_str).strip()
+                        if clean:
+                            output_lines.append(clean)
+                            debug(f"CLI: {clean[:200]}")
+                        if "selectAccounts" in line_str:
+                            urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', line_str)
+                            if urls:
+                                login_url = urls[0]
+                                break
+                    else:
+                        await asyncio.sleep(0.3)
+
+                # Store proc for later cleanup
+                child = None
+                _cli_proc = proc
         else:
-            # Linux/macOS: use 'script' for PTY
-            proc = subprocess.Popen(
-                ["script", "-qc", f"echo '/login' | {cli_path}", "/dev/null"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env={**os.environ, "TERM": "dumb"},
-            )
+            # Linux/macOS: use pexpect for reliable PTY interaction
+            import pexpect as _pexpect
+            import re as _re
 
-            login_url = None
-            start_time = time.monotonic()
-            output_lines = []
+            child = _pexpect.spawn(cli_path, timeout=60, encoding='utf-8', dimensions=(40, 120))
+            _cli_proc = None
 
-            # Read output looking for the login URL (Linux/macOS only — Windows handled above)
-            while time.monotonic() - start_time < 60:
-                try:
-                    line = proc.stdout.readline()
-                    if not line:
-                        if proc.poll() is not None:
+            try:
+                # Wait for TUI ready
+                child.expect(['Not logged in', 'Type your message'], timeout=15)
+                debug("TUI ready")
+                await asyncio.sleep(1)
+
+                # Type /login + Tab (autocomplete) + Enter (submit)
+                child.send('/login')
+                await asyncio.sleep(0.5)
+                child.send('\t')
+                await asyncio.sleep(0.5)
+                child.send('\r')
+                await asyncio.sleep(2)
+
+                # "Choose login method" menu — Enter to select "Login with browser"
+                child.send('\r')
+                await asyncio.sleep(3)
+
+                # Read output for URL
+                start_time = time.monotonic()
+                full_output = ""
+                while time.monotonic() - start_time < 30:
+                    try:
+                        chunk = child.read_nonblocking(size=4096, timeout=2)
+                        full_output += chunk
+                        if "selectAccounts" in chunk:
+                            await asyncio.sleep(2)
+                            try:
+                                full_output += child.read_nonblocking(size=8192, timeout=3)
+                            except:
+                                pass
                             break
-                        await asyncio.sleep(0.1)
+                    except _pexpect.TIMEOUT:
                         continue
-
-                    line_str = line.decode("utf-8", errors="replace").strip()
-                    output_lines.append(line_str)
-                    debug(f"CLI: {line_str[:200]}")
-
-                    # Look for the login URL
-                    if "qoder.com/device/selectAccounts" in line_str:
-                        import re
-                        urls = re.findall(r'https://[^\s\])"\']+selectAccounts[^\s\])"\']*', line_str)
-                        if urls:
-                            login_url = urls[0]
-                            debug(f"Found login URL: {login_url}")
-                            break
-
-                    # Also check for direct URL output
-                    if line_str.startswith("http") and "qoder" in line_str:
-                        login_url = line_str.strip()
-                        debug(f"Found URL: {login_url}")
+                    except _pexpect.EOF:
                         break
 
-                except Exception as e:
-                    debug(f"Read error: {e}")
-                    await asyncio.sleep(0.1)
+                # Extract URL
+                urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', full_output)
+                if urls:
+                    login_url = urls[0]
+                    debug(f"Found login URL: {login_url}")
+
+                clean = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', full_output)
+                for line in clean.split('\n'):
+                    line = line.strip()
+                    if line:
+                        output_lines.append(line)
+
+            except Exception as e:
+                debug(f"pexpect error: {e}")
 
         if not login_url:
             debug(f"No login URL found in CLI output. Lines: {output_lines[-10:]}")
-            proc.kill()
+            try:
+                if child:
+                    child.close(force=True)
+                elif _cli_proc:
+                    _cli_proc.kill()
+            except Exception:
+                pass
             return None
 
         # Visit the URL with Camoufox (already authenticated)
@@ -1049,8 +986,13 @@ async def _cli_device_flow(page) -> dict | None:
             # Wait for CLI to complete
             progress("cli_wait", "Waiting for CLI to complete login...")
             for _ in range(30):
-                if proc.poll() is not None:
-                    break
+                # Check pexpect child or subprocess
+                if child:
+                    if not child.isalive():
+                        break
+                elif _cli_proc:
+                    if _cli_proc.poll() is not None:
+                        break
                 # Check if auth file appeared
                 if os.path.exists(auth_file):
                     debug("Auth file appeared!")
@@ -1063,7 +1005,10 @@ async def _cli_device_flow(page) -> dict | None:
 
         # Kill CLI if still running
         try:
-            proc.kill()
+            if child:
+                child.close(force=True)
+            elif _cli_proc:
+                _cli_proc.kill()
         except Exception:
             pass
 
