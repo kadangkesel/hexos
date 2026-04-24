@@ -167,11 +167,11 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       const qoderReq = buildQoderRequest(userInfo, bodyJson, urlPath);
       requestBody = qoderReq.encryptedBody;
 
-      // Set model selection header
+      // Set model selection header (lowercase for HTTP/2 compat)
       requestHeaders = {
         ...qoderReq.headers,
-        "X-Model-Key": model,
-        "X-Model-Source": "system",
+        "x-model-key": model,
+        "x-model-source": "system",
       };
     } else if (isKiro) {
       const profileArn = conn.uid || "";

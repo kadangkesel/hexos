@@ -142,6 +142,7 @@ export interface BearerAuthResult {
   cosyKey: string;         // RSA-encrypted AES key (base64) → Cosy-Key header
   cosyUser: string;        // User UID → Cosy-User header
   cosyDate: number;        // Unix timestamp → Cosy-Date header
+  aesKey: string;          // Raw AES key (16 chars) — needed for body encryption
 }
 
 /**
@@ -155,7 +156,6 @@ export interface BearerAuthResult {
 export function generateBearerToken(
   userInfo: QoderUserInfo,
   urlPath: string,
-  bodyStr = "",
   cosyVersion = COSY_VERSION,
   ideVersion = IDE_VERSION,
 ): BearerAuthResult {
@@ -186,9 +186,10 @@ export function generateBearerToken(
   const base64Payload = Buffer.from(payload, "utf8").toString("base64");
 
   // 5. Calculate signature
-  // From IDE source: o = `${t}\n${e}\n${i}\n${s}\n${n}`
-  // where t=base64Payload, e=rsaEncryptedKey, i=timestamp, s=body, n=cleanPath
-  // signature = MD5(o)
+  // From IDE source: calculateSignature(payload, key, timestamp, body, url)
+  //   o = `${payload}\n${cleanPath}`
+  //   return md5(o)
+  // Note: md5Encode(...args) joins with "&" but only 1 arg is passed, so no "&"
   let cleanPath: string;
   try {
     cleanPath = new URL(urlPath).pathname;
@@ -200,7 +201,7 @@ export function generateBearerToken(
   if (cleanPath.startsWith("/algo")) cleanPath = cleanPath.slice(5);
 
   const timestamp = Math.floor(Date.now() / 1000);
-  const signInput = `${base64Payload}\n${encryptedKey}\n${timestamp}\n${bodyStr}\n${cleanPath}`;
+  const signInput = `${base64Payload}\n${cleanPath}`;
   const signature = md5(signInput);
 
   // 6. Build final token
@@ -209,6 +210,7 @@ export function generateBearerToken(
     cosyKey: encryptedKey,
     cosyUser: userInfo.uid,
     cosyDate: timestamp,
+    aesKey,
   };
 }
 
@@ -252,8 +254,8 @@ export function buildQoderRequest(
   const mToken = machineToken || crypto.randomUUID().replace(/-/g, "").substring(0, 28);
   const mType = crypto.createHash("md5").update(mId).digest("hex").substring(0, 18);
 
-  // Generate Bearer COSY token (signature includes body)
-  const auth = generateBearerToken(userInfo, urlPath, bodyJson);
+  // Generate Bearer COSY token
+  const auth = generateBearerToken(userInfo, urlPath);
 
   // Build headers — Cosy-Key MUST match the key used in signature calculation
   const headers: Record<string, string> = {
@@ -281,7 +283,9 @@ export function buildQoderRequest(
     "X-Request-Id": crypto.randomUUID(),
   };
 
-  return { headers, encryptedBody: bodyJson };
+  // Encrypt body with the SAME AES key used in Bearer token
+  const encrypted = encryptBody(bodyJson, auth.aesKey);
+  return { headers, encryptedBody: encrypted };
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +324,7 @@ const INFERENCE_PATH = "/algo/api/v2/service/pro/sse/agent_chat_generation";
  * Build the full inference URL with query parameters.
  */
 export function buildInferenceUrl(): string {
-  return `${INFERENCE_BASE}${INFERENCE_PATH}?FetchKeys=llm_model_result&AgentId=agent_common`;
+  return `${INFERENCE_BASE}${INFERENCE_PATH}?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`;
 }
 
 /**
@@ -349,7 +353,7 @@ export async function checkQoderStatus(
 
     const { signature, timestamp } = generateSignature("POST", path, requestId, mToken, "", COSY_VERSION);
 
-    const auth = generateBearerToken(userInfo, fullPath, "{}");
+    const auth = generateBearerToken(userInfo, fullPath);
 
     const res = await fetch(`https://center.qoder.sh${fullPath}?Encode=1`, {
       method: "POST",
