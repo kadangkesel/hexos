@@ -16,6 +16,7 @@ import { openaiToKiro } from "./kiro-transform.ts";
 import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
 import { buildQoderRequest, buildInferenceUrl, type QoderUserInfo } from "./qoder-auth.ts";
 import { qoderToOpenAIStream, qoderToOpenAINonStream } from "./qoder-stream.ts";
+import crypto from "crypto";
 
 // Try ALL active connections before giving up.
 // Previously capped at 3, but with 100+ accounts we want full rotation.
@@ -156,12 +157,24 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
         continue;
       }
 
-      // Build sanitized body first (OpenAI format)
+      // Build process body first (OpenAI format)
       const built = buildUpstreamBody(body, model, stream);
-      const bodyJson = built.finalBodyStr;
+      let qoderBody: any;
+      try { qoderBody = JSON.parse(built.finalBodyStr); } catch { qoderBody = {}; }
+
+      // Inject Qoder-specific fields required by agent_router
+      qoderBody.session_id = qoderBody.session_id || crypto.randomUUID();
+      qoderBody.request_set_id = qoderBody.request_set_id || crypto.randomUUID();
+      qoderBody.scene = qoderBody.scene || "chat";
+      if (!qoderBody.max_output_tokens && qoderBody.max_tokens) {
+        qoderBody.max_output_tokens = qoderBody.max_tokens;
+        delete qoderBody.max_tokens;
+      }
+
+      const bodyJson = JSON.stringify(qoderBody);
       debugScanBody(bodyJson, resolvedModel);
 
-      // Build Qoder request with auth + encryption
+      // Build Qoder request with auth
       requestUrl = buildInferenceUrl();
       const urlPath = new URL(requestUrl).pathname;
       const qoderReq = buildQoderRequest(userInfo, bodyJson, urlPath);
