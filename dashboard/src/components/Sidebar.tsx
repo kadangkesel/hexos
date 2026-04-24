@@ -42,6 +42,7 @@ import {
 const navItems = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/" },
   { label: "Accounts", icon: Users, href: "/accounts" },
+  { label: "Qoder", icon: Zap, href: "/qoder" },
   { label: "Models", icon: Cpu, href: "/models" },
   { label: "Logs", icon: FileText, href: "/logs" },
   { label: "API Key", icon: Key, href: "/api-key" },

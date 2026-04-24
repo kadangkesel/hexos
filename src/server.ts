@@ -870,6 +870,146 @@ export function createApp() {
     return c.json(result);
   });
 
+  // --- Qoder Auth ---
+
+  // Add Qoder connection manually (uid + token)
+  app.post("/api/qoder/add", async (c) => {
+    const body = await c.req.json();
+    const { uid, token, refreshToken, label } = body as {
+      uid: string; token: string; refreshToken?: string; label?: string;
+    };
+
+    if (!uid || !token) {
+      return c.json({ error: "uid and token are required" }, 400);
+    }
+
+    const conn = await saveConnection({
+      provider: "qoder",
+      label: label || `Qoder (${uid.slice(0, 8)})`,
+      accessToken: token,
+      refreshToken: refreshToken || "",
+      uid,
+    });
+
+    // Verify token
+    try {
+      const { checkQoderToken } = await import("./auth/oauth.ts");
+      const status = await checkQoderToken(token, uid);
+      if (status.valid) {
+        const { updateConnection } = await import("./auth/store.ts");
+        await updateConnection(conn.id, {
+          credit: {
+            totalCredits: 0,
+            remainingCredits: status.isQuotaExceeded ? 0 : 1,
+            usedCredits: 0,
+            packageName: status.plan || "Free",
+            expiresAt: "",
+            fetchedAt: Date.now(),
+          },
+        });
+      }
+      return c.json({ ok: true, id: conn.id, valid: status.valid, plan: status.plan, email: status.email });
+    } catch {
+      return c.json({ ok: true, id: conn.id, valid: null, message: "Saved but could not verify" });
+    }
+  });
+
+  // Import Qoder credentials from CLI auth files
+  app.post("/api/qoder/import-cli", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { authDir, label } = body as { authDir?: string; label?: string };
+
+    const { importQoderFromCli } = await import("./auth/oauth.ts");
+    const result = await importQoderFromCli(authDir, label);
+    if (!result.success) {
+      return c.json({ error: result.error }, 400);
+    }
+    return c.json({ ok: true });
+  });
+
+  // Decrypt Qoder IDE auth (Windows DPAPI) — only works on the machine where IDE is installed
+  app.post("/api/qoder/import-ide", async (c) => {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const { homedir } = require("os");
+
+      const vscdbPath = path.join(homedir(), "AppData", "Roaming", "Qoder", "User", "globalStorage", "state.vscdb");
+      const localStatePath = path.join(homedir(), "AppData", "Roaming", "Qoder", "Local State");
+
+      if (!fs.existsSync(vscdbPath) || !fs.existsSync(localStatePath)) {
+        return c.json({ error: "Qoder IDE not found on this machine" }, 400);
+      }
+
+      // Decrypt DPAPI master key
+      const localState = JSON.parse(fs.readFileSync(localStatePath, "utf8"));
+      const encKeyB64 = localState.os_crypt?.encrypted_key;
+      if (!encKeyB64) return c.json({ error: "No encryption key in Local State" }, 400);
+
+      const dpapiBlob = Buffer.from(encKeyB64, "base64").slice(5); // strip "DPAPI" prefix
+      const ps = Bun.spawnSync([
+        "powershell", "-NoProfile", "-Command",
+        `Add-Type -AssemblyName System.Security; ` +
+        `$bytes = [Convert]::FromBase64String('${dpapiBlob.toString("base64")}'); ` +
+        `$decrypted = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, 'CurrentUser'); ` +
+        `[Convert]::ToBase64String($decrypted)`,
+      ]);
+      const masterKey = Buffer.from(ps.stdout.toString().trim(), "base64");
+      if (masterKey.length !== 32) return c.json({ error: "Failed to decrypt master key" }, 500);
+
+      // Read encrypted auth from vscdb
+      const Database = (await import("bun:sqlite")).default;
+      const db = new Database(vscdbPath, { readonly: true });
+      const row = db.query("SELECT value FROM ItemTable WHERE key = ?").get("secret://aicoding.auth.userInfo") as any;
+      db.close();
+
+      if (!row) return c.json({ error: "No auth data in Qoder IDE" }, 400);
+
+      const parsed = JSON.parse(row.value);
+      const encrypted = Buffer.from(parsed.data);
+
+      // Decrypt: v10 prefix (3 bytes) + nonce (12 bytes) + ciphertext + tag (16 bytes)
+      const prefix = encrypted.slice(0, 3).toString("utf8");
+      if (prefix !== "v10") return c.json({ error: "Unknown encryption format" }, 400);
+
+      const crypto = require("crypto");
+      const nonce = encrypted.slice(3, 15);
+      const ciphertextWithTag = encrypted.slice(15);
+      const tag = ciphertextWithTag.slice(-16);
+      const ciphertext = ciphertextWithTag.slice(0, -16);
+
+      const decipher = crypto.createDecipheriv("aes-256-gcm", masterKey, nonce);
+      decipher.setAuthTag(tag);
+      let decrypted = decipher.update(ciphertext);
+      decrypted = Buffer.concat([decrypted, decipher.final()]);
+      const userInfo = JSON.parse(decrypted.toString("utf8"));
+
+      if (!userInfo.id || !userInfo.token) {
+        return c.json({ error: "Decrypted data missing id or token" }, 400);
+      }
+
+      // Save connection
+      const conn = await saveConnection({
+        provider: "qoder",
+        label: userInfo.email || userInfo.name || `Qoder IDE (${userInfo.id.slice(0, 8)})`,
+        accessToken: userInfo.token,
+        refreshToken: userInfo.refreshToken || "",
+        uid: userInfo.id,
+      });
+
+      return c.json({
+        ok: true,
+        id: conn.id,
+        email: userInfo.email,
+        name: userInfo.name,
+        plan: userInfo.userTag || userInfo.userType,
+        isQuotaExceeded: userInfo.isQuotaExceeded,
+      });
+    } catch (e: any) {
+      return c.json({ error: e.message || "Failed to import from IDE" }, 500);
+    }
+  });
+
   // --- Models ---
   app.get("/api/models", (c) => {
     const models = Object.entries(MODEL_CATALOG).map(([alias, entry]) => ({
