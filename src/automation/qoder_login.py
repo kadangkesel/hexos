@@ -842,7 +842,7 @@ async def _cli_device_flow(page) -> dict | None:
                 from winpty import PtyProcess
                 debug("Using pywinpty ConPTY for TUI interaction")
 
-                pty_proc = PtyProcess.spawn(actual_exe, dimensions=(40, 120))
+                pty_proc = PtyProcess.spawn(actual_exe, dimensions=(40, 500))
 
                 # Read output in background thread
                 output_buffer = []
