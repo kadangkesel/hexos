@@ -937,9 +937,19 @@ async def _cli_device_flow(page) -> dict | None:
                             debug(f"CLI: {line[:200]}")
 
                     if "selectAccounts" in clean:
-                        # Wait a bit more for complete URL data
-                        await asyncio.sleep(3.0)
-                        # Re-read buffer after waiting
+                        # Wait for complete URL — URL ends with client_id=...
+                        # Each char has ANSI codes (~20 bytes/char), so URL arrives slowly
+                        for _wait in range(15):
+                            await asyncio.sleep(1.0)
+                            combined_str = "".join(output_buffer)
+                            _tmp = combined_str
+                            _tmp = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', _tmp)
+                            _tmp = _re.sub(r'\x1b.', '', _tmp)
+                            if 'client_id=' in _tmp:
+                                break
+                        
+                        # Re-read and re-clean buffer
+                        await asyncio.sleep(1.0)
                         combined_str = "".join(output_buffer)
                         clean = combined_str
                         while '\x1b]' in clean:
