@@ -38,9 +38,8 @@ export function buildCodexRequestBody(
   };
 
   if (instructions) body.instructions = instructions;
-  // Note: Codex Responses API does NOT support temperature, top_p, etc.
-  // Only pass parameters that the API accepts.
-  if (openaiBody.max_tokens !== undefined) body.max_output_tokens = openaiBody.max_tokens;
+  // Note: Codex Responses API does NOT support temperature, top_p, max_output_tokens, etc.
+  // Only pass: model, input, stream, store, instructions, reasoning
   if (openaiBody.reasoning_effort) {
     body.reasoning = { effort: openaiBody.reasoning_effort };
   }
