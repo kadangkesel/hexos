@@ -937,28 +937,22 @@ async def _cli_device_flow(page) -> dict | None:
                             debug(f"CLI: {line[:200]}")
 
                     if "selectAccounts" in clean:
-                        # Find and join URL lines
-                        url_lines = []
-                        capturing_url = False
+                        # Find URL line — with 500-col width, URL fits on one line
                         for uline in clean.split('\n'):
                             uline = uline.strip()
-                            if not uline:
-                                continue
                             if 'https://qoder.com/device/selectAccounts' in uline:
-                                capturing_url = True
                                 idx = uline.index('https://')
-                                url_lines.append(uline[idx:])
-                            elif capturing_url:
-                                if ('=' in uline or '&' in uline) and not uline.startswith(('Polling', 'Press', 'Status', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '⠋', '─', '│', '╭', '╰', '?', '>')):
-                                    url_lines.append(uline)
-                                    if 'client_id=' in uline:
-                                        capturing_url = False
-                                else:
-                                    capturing_url = False
-
-                        if url_lines:
-                            login_url = ''.join(url_lines).strip()
-                            debug(f"Found login URL: {login_url[:200]}")
+                                # Extract URL: everything from https:// until whitespace or non-URL char
+                                url_part = uline[idx:]
+                                # Find end of URL
+                                for ci, ch in enumerate(url_part):
+                                    if ch in ('\n', '\r', ' ', '\t') or ord(ch) > 127:
+                                        url_part = url_part[:ci]
+                                        break
+                                login_url = url_part.strip()
+                                debug(f"Found login URL: {login_url[:200]}")
+                                break
+                        if login_url:
                             break
                     await asyncio.sleep(1.0)
 
