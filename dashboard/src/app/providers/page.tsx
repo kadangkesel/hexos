@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { motion } from "motion/react";
 import {
   Zap,
+  Brain,
   ChevronRight,
   Users,
 } from "lucide-react";
@@ -30,6 +31,15 @@ interface ProviderCard {
 }
 
 const providers: ProviderCard[] = [
+  {
+    id: "codex",
+    name: "Codex",
+    description: "OpenAI — GPT-5.5, GPT-5.4, GPT-5.3 Codex models via ChatGPT. Free with ChatGPT Plus subscription.",
+    icon: Brain,
+    href: "/providers/codex",
+    badge: "6 models",
+    color: "text-emerald-500",
+  },
   {
     id: "qoder",
     name: "Qoder",
