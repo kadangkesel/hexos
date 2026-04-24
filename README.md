@@ -191,20 +191,6 @@ bun scripts/build.ts
 bun scripts/build.ts --all
 ```
 
-### Release
-
-```bash
-# Bump version in package.json, then:
-git tag v0.2.0
-git push origin v0.2.0
-
-# GitHub Actions automatically:
-# 1. Builds 5 binaries (linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64)
-# 2. Exports dashboard as static HTML
-# 3. Creates GitHub Release with all artifacts + checksums
-# 4. Updates hexos.kadangkesel.net version file
-```
-
 ## License
 
 MIT
