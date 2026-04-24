@@ -945,7 +945,7 @@ async def _cli_device_flow(page) -> dict | None:
                             _tmp = combined_str
                             _tmp = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', _tmp)
                             _tmp = _re.sub(r'\x1b.', '', _tmp)
-                            if 'client_id=' in _tmp:
+                            if 'client_id=e883' in _tmp:
                                 break
                         
                         # Re-read and re-clean buffer
