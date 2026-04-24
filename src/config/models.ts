@@ -40,7 +40,7 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "cl/gpt-oss-120b:free":    { provider: "cline", model: "openai/gpt-oss-120b:free",       info: { id: "cl/gpt-oss-120b:free",    name: "GPT OSS 120B (Free)", contextWindow: 200000 } },
 
   // Qoder models (prefix: qd/) — Alibaba Cloud backend
-  // Public models
+  // Only REAL distinct models — hidden keys (opus-4, gpt-5, etc) all fallback to Qwen
   "qd/lite":              { provider: "qoder", model: "lite",              info: { id: "qd/lite",              name: "Qoder Lite (Free)", contextWindow: 180000 } },
   "qd/auto":              { provider: "qoder", model: "auto",              info: { id: "qd/auto",              name: "Qoder Auto", contextWindow: 180000 } },
   "qd/efficient":         { provider: "qoder", model: "efficient",         info: { id: "qd/efficient",         name: "Qoder Efficient", contextWindow: 180000 } },
