@@ -937,6 +937,27 @@ async def _cli_device_flow(page) -> dict | None:
                             debug(f"CLI: {line[:200]}")
 
                     if "selectAccounts" in clean:
+                        # Wait a bit more for complete URL data
+                        await asyncio.sleep(3.0)
+                        # Re-read buffer after waiting
+                        combined_str = "".join(output_buffer)
+                        clean = combined_str
+                        while '\x1b]' in clean:
+                            start_idx = clean.index('\x1b]')
+                            end_bel = clean.find('\x07', start_idx)
+                            end_st = clean.find('\x1b\\', start_idx)
+                            ends = [e for e in [end_bel, end_st] if e > start_idx]
+                            if ends:
+                                end = min(ends)
+                                end_len = 1 if end == end_bel else 2
+                                clean = clean[:start_idx] + clean[end + end_len:]
+                            else:
+                                nl = clean.find('\n', start_idx)
+                                clean = clean[:start_idx] + (clean[nl:] if nl > start_idx else '')
+                        clean = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
+                        clean = _re.sub(r'\x1b.', '', clean)
+                        clean = _re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', '', clean)
+                        
                         # Find URL line — with 500-col width, URL fits on one line
                         for uline in clean.split('\n'):
                             uline = uline.strip()
