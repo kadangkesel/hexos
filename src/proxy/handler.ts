@@ -166,10 +166,13 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       qoderBody.session_id = qoderBody.session_id || crypto.randomUUID();
       qoderBody.request_set_id = qoderBody.request_set_id || crypto.randomUUID();
       qoderBody.scene = qoderBody.scene || "chat";
+      qoderBody.agent_id = qoderBody.agent_id || "agent_common";
+      if (qoderBody.temperature === undefined) qoderBody.temperature = 0.7;
       if (!qoderBody.max_output_tokens && qoderBody.max_tokens) {
         qoderBody.max_output_tokens = qoderBody.max_tokens;
         delete qoderBody.max_tokens;
       }
+      if (!qoderBody.max_output_tokens) qoderBody.max_output_tokens = 16384;
 
       const bodyJson = JSON.stringify(qoderBody);
       debugScanBody(bodyJson, resolvedModel);
