@@ -284,9 +284,9 @@ export function buildQoderRequest(
     "X-Request-Id": crypto.randomUUID(),
   };
 
-  // Encrypt body with the SAME AES key used in Bearer token
-  const encrypted = encryptBody(bodyJson, auth.aesKey);
-  return { headers, encryptedBody: encrypted };
+  // Send plaintext body (no encryption) — Encode=1 is NOT used
+  // Server accepts plaintext JSON when Encode param is absent
+  return { headers, encryptedBody: bodyJson };
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ const INFERENCE_PATH = "/algo/api/v2/service/pro/sse/agent_chat_generation";
  * Build the full inference URL with query parameters.
  */
 export function buildInferenceUrl(): string {
-  return `${INFERENCE_BASE}${INFERENCE_PATH}?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`;
+  return `${INFERENCE_BASE}${INFERENCE_PATH}?FetchKeys=llm_model_result&AgentId=agent_common`;
 }
 
 /**
