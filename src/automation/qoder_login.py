@@ -906,49 +906,38 @@ async def _cli_device_flow(page) -> dict | None:
                 start_time = time.monotonic()
                 while time.monotonic() - start_time < 40:
                     combined_str = "".join(output_buffer)
+                    
+                    # Strip ALL ANSI escape sequences first (URL chars are individually colored)
+                    clean = combined_str
+                    # OSC: ESC ] ... (BEL or ST)
+                    while '\x1b]' in clean:
+                        start_idx = clean.index('\x1b]')
+                        end_bel = clean.find('\x07', start_idx)
+                        end_st = clean.find('\x1b\\', start_idx)
+                        ends = [e for e in [end_bel, end_st] if e > start_idx]
+                        if ends:
+                            end = min(ends)
+                            end_len = 1 if end == end_bel else 2
+                            clean = clean[:start_idx] + clean[end + end_len:]
+                        else:
+                            nl = clean.find('\n', start_idx)
+                            clean = clean[:start_idx] + (clean[nl:] if nl > start_idx else '')
+                    # CSI: ESC [ ... letter
+                    clean = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
+                    # Any remaining ESC
+                    clean = _re.sub(r'\x1b.', '', clean)
+                    # Control chars except newline/CR
+                    clean = _re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', '', clean)
+                    
                     # Log new lines for debug
-                    clean_lines = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', combined_str)
-                    for line in clean_lines.split('\n'):
+                    for line in clean.split('\n'):
                         line = line.strip()
                         if line and line not in output_lines:
                             output_lines.append(line)
                             debug(f"CLI: {line[:200]}")
 
-                    if "selectAccounts" in combined_str:
-                        # Extract URL from terminal output
-                        # The URL is printed after "copy the following link" message
-                        # and may span multiple lines due to terminal width wrapping
-                        # Use simple string search instead of complex regex
-                        
-                        # First, strip ALL escape sequences with multiple passes
-                        clean = combined_str
-                        # OSC: ESC ] ... (BEL or ST)
-                        while '\x1b]' in clean:
-                            start = clean.index('\x1b]')
-                            # Find terminator: BEL (\x07) or ST (\x1b\\)
-                            end_bel = clean.find('\x07', start)
-                            end_st = clean.find('\x1b\\', start)
-                            ends = [e for e in [end_bel, end_st] if e > start]
-                            if ends:
-                                end = min(ends)
-                                end_len = 1 if end == end_bel else 2
-                                clean = clean[:start] + clean[end + end_len:]
-                            else:
-                                # No terminator found, remove to end of line
-                                nl = clean.find('\n', start)
-                                if nl > start:
-                                    clean = clean[:start] + clean[nl:]
-                                else:
-                                    clean = clean[:start]
-                        # CSI: ESC [ ... letter
-                        import re as _re2
-                        clean = _re2.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
-                        # Any remaining ESC
-                        clean = _re2.sub(r'\x1b.', '', clean)
-                        # Control chars except newline/CR
-                        clean = _re2.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', '', clean)
-                        
-                        # Now find and join URL lines
+                    if "selectAccounts" in clean:
+                        # Find and join URL lines
                         url_lines = []
                         capturing_url = False
                         for uline in clean.split('\n'):
@@ -960,7 +949,6 @@ async def _cli_device_flow(page) -> dict | None:
                                 idx = uline.index('https://')
                                 url_lines.append(uline[idx:])
                             elif capturing_url:
-                                # URL continuation: contains = or & (URL params)
                                 if ('=' in uline or '&' in uline) and not uline.startswith(('Polling', 'Press', 'Status', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '⠋', '─', '│', '╭', '╰', '?', '>')):
                                     url_lines.append(uline)
                                     if 'client_id=' in uline:
