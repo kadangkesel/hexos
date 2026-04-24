@@ -968,21 +968,22 @@ async def _cli_device_flow(page) -> dict | None:
                         clean = _re.sub(r'\x1b.', '', clean)
                         clean = _re.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', '', clean)
                         
-                        # Find URL line — with 500-col width, URL fits on one line
-                        for uline in clean.split('\n'):
-                            uline = uline.strip()
-                            if 'https://qoder.com/device/selectAccounts' in uline:
-                                idx = uline.index('https://')
-                                # Extract URL: everything from https:// until whitespace or non-URL char
-                                url_part = uline[idx:]
-                                # Find end of URL
-                                for ci, ch in enumerate(url_part):
-                                    if ch in ('\n', '\r', ' ', '\t') or ord(ch) > 127:
-                                        url_part = url_part[:ci]
-                                        break
-                                login_url = url_part.strip()
+                        # Find URL — may still span lines due to \r\n in output
+                        # Collect all text between "selectAccounts" and "Polling"
+                        sa_idx = clean.find('selectAccounts')
+                        poll_idx = clean.find('Polling', sa_idx) if sa_idx >= 0 else -1
+                        if sa_idx >= 0:
+                            # Find the https:// before selectAccounts
+                            url_start = clean.rfind('https://', max(0, sa_idx - 200), sa_idx + 20)
+                            if url_start >= 0:
+                                url_end = poll_idx if poll_idx > url_start else sa_idx + 500
+                                url_block = clean[url_start:url_end]
+                                # Remove all whitespace (newlines, spaces, tabs, \r)
+                                url_block = _re.sub(r'\s+', '', url_block)
+                                # Remove any non-URL chars at the end
+                                url_block = _re.sub(r'[^a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]+$', '', url_block)
+                                login_url = url_block
                                 debug(f"Found login URL: {login_url[:200]}")
-                                break
                         if login_url:
                             break
                     await asyncio.sleep(1.0)
