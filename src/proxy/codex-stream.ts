@@ -24,29 +24,39 @@ export function buildCodexRequestBody(
       instructions += (instructions ? "\n" : "") + text;
     } else if (msg.role === "tool") {
       // Tool result — convert to Responses API function_call_output format
-      input.push({
-        type: "function_call_output",
-        call_id: msg.tool_call_id,
-        output: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
-      });
-    } else if (msg.role === "assistant" && msg.tool_calls) {
-      // Assistant message with tool calls — convert to function_call items
-      if (msg.content) {
-        input.push({ role: "assistant", content: msg.content });
-      }
-      for (const tc of msg.tool_calls) {
+      // Skip if no call_id (required by Responses API)
+      if (msg.tool_call_id) {
         input.push({
-          type: "function_call",
-          id: tc.id,
-          name: tc.function?.name,
-          arguments: tc.function?.arguments || "{}",
+          type: "function_call_output",
+          call_id: msg.tool_call_id,
+          output: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
         });
       }
+    } else if (msg.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      // Assistant message with tool calls — convert to function_call items
+      // Must push content first (if any), then each tool call
+      if (msg.content) {
+        input.push({ role: "assistant", content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content) });
+      }
+      for (const tc of msg.tool_calls) {
+        if (tc.id && tc.function?.name) {
+          input.push({
+            type: "function_call",
+            id: tc.id,
+            name: tc.function.name,
+            arguments: tc.function?.arguments || "{}",
+          });
+        }
+      }
     } else {
-      input.push({
-        role: msg.role === "assistant" ? "assistant" : "user",
-        content: msg.content,
-      });
+      // Regular user/assistant message
+      const content = msg.content;
+      if (content !== undefined && content !== null) {
+        input.push({
+          role: msg.role === "assistant" ? "assistant" : "user",
+          content: typeof content === "string" ? content : JSON.stringify(content),
+        });
+      }
     }
   }
 
