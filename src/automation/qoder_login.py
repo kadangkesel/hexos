@@ -833,13 +833,38 @@ async def _cli_device_flow(page) -> dict | None:
                     actual_exe = exe_path
                     debug(f"Resolved to actual binary: {actual_exe}")
 
-            # Windows: use wexpect (pexpect for Windows) or subprocess with ConPTY
-            try:
-                import wexpect
-                child = wexpect.spawn(actual_exe, timeout=60)
-            except ImportError:
-                # Fallback: use subprocess with stdin pipe
-                debug("wexpect not available, using subprocess stdin pipe")
+            # Windows: use winpty from Git for Windows for real PTY interaction
+            # Bubble Tea TUI requires a real PTY — subprocess stdin pipe doesn't work
+            import re as _re
+            import threading
+
+            # Strategy 1: Try winpty.exe from Git for Windows
+            winpty_exe = None
+            git_paths = [
+                os.path.join(os.environ.get("ProgramFiles", ""), "Git", "usr", "bin", "winpty.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Git", "usr", "bin", "winpty.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "usr", "bin", "winpty.exe"),
+            ]
+            for gp in git_paths:
+                if os.path.isfile(gp):
+                    winpty_exe = gp
+                    break
+            if not winpty_exe:
+                import shutil as _shutil
+                winpty_exe = _shutil.which("winpty")
+
+            if winpty_exe:
+                debug(f"Using winpty: {winpty_exe}")
+                # winpty provides a real PTY wrapper — TUI works correctly
+                proc = subprocess.Popen(
+                    [winpty_exe, actual_exe],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    env={**os.environ},
+                )
+            else:
+                debug("winpty not found, trying direct subprocess (may not work with TUI)")
                 proc = subprocess.Popen(
                     [actual_exe],
                     stdin=subprocess.PIPE,
@@ -847,46 +872,97 @@ async def _cli_device_flow(page) -> dict | None:
                     stderr=subprocess.STDOUT,
                     env={**os.environ},
                 )
-                # Wait for TUI, then send /login
-                await asyncio.sleep(5)
+
+            # Read output in background thread
+            output_buffer = []
+            read_done = threading.Event()
+
+            def _reader():
+                while not read_done.is_set():
+                    try:
+                        line = proc.stdout.readline()
+                        if not line:
+                            break
+                        output_buffer.append(line)
+                    except Exception:
+                        break
+
+            reader_thread = threading.Thread(target=_reader, daemon=True)
+            reader_thread.start()
+
+            # Wait for TUI to initialize
+            tui_ready = False
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < 15:
+                await asyncio.sleep(0.5)
+                combined = b"".join(output_buffer)
+                combined_str = combined.decode("utf-8", errors="replace")
+                if "Not logged in" in combined_str or "Type your message" in combined_str:
+                    tui_ready = True
+                    break
+
+            if tui_ready:
+                debug("TUI ready, sending /login sequence")
+                await asyncio.sleep(1.0)
+
+                # Send /login + Enter
                 try:
-                    proc.stdin.write(b"/login\r\n")
+                    proc.stdin.write(b"/login\r")
                     proc.stdin.flush()
-                    await asyncio.sleep(2)
-                    proc.stdin.write(b"\r\n")  # Select "Login with browser"
+                    await asyncio.sleep(1.0)
+
+                    # Tab to select autocomplete + Enter to submit
+                    proc.stdin.write(b"\t")
+                    proc.stdin.flush()
+                    await asyncio.sleep(0.5)
+                    proc.stdin.write(b"\r")
+                    proc.stdin.flush()
+                    await asyncio.sleep(2.0)
+
+                    # Enter to select "Login with browser" (first option)
+                    proc.stdin.write(b"\r")
+                    proc.stdin.flush()
+                    debug("Sent /login + Tab + Enter + Enter")
+                except Exception as e:
+                    debug(f"stdin write error: {e}")
+            else:
+                debug("TUI not ready after 15s, sending /login anyway")
+                try:
+                    proc.stdin.write(b"/login\r")
+                    proc.stdin.flush()
+                    await asyncio.sleep(1.0)
+                    proc.stdin.write(b"\t\r")
+                    proc.stdin.flush()
+                    await asyncio.sleep(2.0)
+                    proc.stdin.write(b"\r")
                     proc.stdin.flush()
                 except Exception as e:
                     debug(f"stdin write error: {e}")
 
-                # Read output for URL
-                import threading, re as _re
-                start_time = time.monotonic()
-                while time.monotonic() - start_time < 40:
-                    result_holder = [None]
-                    def _read():
-                        try: result_holder[0] = proc.stdout.readline()
-                        except: pass
-                    t = threading.Thread(target=_read, daemon=True)
-                    t.start()
-                    t.join(timeout=2.0)
-                    line = result_holder[0] or b""
-                    if line:
-                        line_str = line.decode("utf-8", errors="replace")
-                        clean = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', line_str).strip()
-                        if clean:
-                            output_lines.append(clean)
-                            debug(f"CLI: {clean[:200]}")
-                        if "selectAccounts" in line_str:
-                            urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', line_str)
-                            if urls:
-                                login_url = urls[0]
-                                break
-                    else:
-                        await asyncio.sleep(0.3)
+            # Wait for login URL in output
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < 40:
+                combined = b"".join(output_buffer)
+                combined_str = combined.decode("utf-8", errors="replace")
+                # Log new lines for debug
+                clean_lines = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', combined_str)
+                for line in clean_lines.split('\n'):
+                    line = line.strip()
+                    if line and line not in output_lines:
+                        output_lines.append(line)
+                        debug(f"CLI: {line[:200]}")
 
-                # Store proc for later cleanup
-                child = None
-                _cli_proc = proc
+                if "selectAccounts" in combined_str:
+                    urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', combined_str)
+                    if urls:
+                        login_url = urls[0]
+                        debug(f"Found login URL: {login_url[:200]}")
+                        break
+                await asyncio.sleep(1.0)
+
+            read_done.set()
+            child = None
+            _cli_proc = proc
         else:
             # Linux/macOS: use pexpect for reliable PTY interaction
             import pexpect as _pexpect
