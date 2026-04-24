@@ -821,15 +821,31 @@ async def _cli_device_flow(page) -> dict | None:
         progress("cli_spawn", "Spawning Qoder CLI for device login...")
 
         if sys.platform == "win32":
-            # Windows: CLI prints URL to stderr/stdout without needing PTY
-            # Use cmd /c to pipe /login command
-            shell_cmd = f'echo /login | "{cli_path}"'
+            # Windows: resolve .cmd/.ps1 wrapper to actual .exe binary
+            actual_exe = cli_path
+            if cli_path.lower().endswith((".cmd", ".ps1")):
+                # npm wrapper — find the actual Go binary
+                npm_dir = os.path.dirname(cli_path)
+                exe_path = os.path.join(npm_dir, "node_modules", "@qoder-ai", "qodercli", "bin", "qodercli.exe")
+                if os.path.isfile(exe_path):
+                    actual_exe = exe_path
+                    debug(f"Resolved to actual binary: {actual_exe}")
+
+            # Pipe /login command via stdin
             proc = subprocess.Popen(
-                ["cmd", "/c", shell_cmd],
+                [actual_exe],
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 env={**os.environ},
             )
+            # Write /login command after a short delay (let CLI initialize)
+            await asyncio.sleep(2.0)
+            try:
+                proc.stdin.write(b"/login\n")
+                proc.stdin.flush()
+            except Exception as e:
+                debug(f"stdin write error: {e}")
         else:
             # Linux/macOS: use 'script' for PTY
             proc = subprocess.Popen(
