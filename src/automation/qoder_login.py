@@ -735,29 +735,78 @@ async def _cli_device_flow(page) -> dict | None:
     import subprocess
     import shutil
 
-    # Find qodercli binary
+    # Find qodercli binary — auto-install via npm if not found
     cli_path = shutil.which("qodercli")
     if not cli_path:
-        for p in [
+        search_paths = [
             os.path.expanduser("~/.local/bin/qodercli"),
             os.path.expanduser("~/.qoder/bin/qodercli/qodercli-0.1.47"),
             "/usr/local/bin/qodercli",
-        ]:
+        ]
+        # Windows: npm global installs to AppData
+        if sys.platform == "win32":
+            appdata = os.environ.get("APPDATA", "")
+            localappdata = os.environ.get("LOCALAPPDATA", "")
+            search_paths.extend([
+                os.path.join(appdata, "npm", "qodercli.cmd"),
+                os.path.join(appdata, "npm", "qodercli"),
+                os.path.join(localappdata, "Programs", "Qoder", "resources", "app", "bin", "qodercli.exe"),
+                os.path.expanduser("~/.qoder/bin/qodercli/qodercli.exe"),
+            ])
+        for p in search_paths:
             if os.path.isfile(p) and os.access(p, os.X_OK):
                 cli_path = p
                 break
 
     if not cli_path:
-        debug("qodercli binary not found")
-        progress("cli_not_found", "Qoder CLI not found — install with: curl -fsSL https://hexos.kadangkesel.net/install.sh | bash")
+        # Auto-install via npm
+        progress("cli_install", "Qoder CLI not found, installing via npm...")
+        debug("Running: npm install -g @qoder-ai/qodercli")
+        try:
+            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
+            install_proc = subprocess.run(
+                [npm_cmd, "install", "-g", "@qoder-ai/qodercli"],
+                capture_output=True, text=True, timeout=120,
+            )
+            debug(f"npm install stdout: {install_proc.stdout[-300:]}")
+            debug(f"npm install stderr: {install_proc.stderr[-300:]}")
+            if install_proc.returncode == 0:
+                cli_path = shutil.which("qodercli")
+                if not cli_path and sys.platform == "win32":
+                    appdata = os.environ.get("APPDATA", "")
+                    for p in [os.path.join(appdata, "npm", "qodercli.cmd"), os.path.join(appdata, "npm", "qodercli")]:
+                        if os.path.isfile(p):
+                            cli_path = p
+                            break
+                if cli_path:
+                    progress("cli_installed", f"Qoder CLI installed: {cli_path}")
+                else:
+                    debug("npm install succeeded but qodercli not found in PATH")
+            else:
+                debug(f"npm install failed: exit={install_proc.returncode}")
+        except FileNotFoundError:
+            debug("npm not found — cannot auto-install qodercli")
+        except Exception as e:
+            debug(f"npm install error: {e}")
+
+    if not cli_path:
+        debug("qodercli binary not found after install attempt")
+        progress("cli_not_found", "Qoder CLI not found. Install manually: npm install -g @qoder-ai/qodercli")
         return None
 
     debug(f"Using CLI: {cli_path}")
 
-    # Remove existing auth to force re-login
+    # Auth file paths — cross-platform
     auth_dir = os.path.expanduser("~/.qoder/.auth")
     auth_file = os.path.join(auth_dir, "user")
     id_file = os.path.join(auth_dir, "id")
+    # Windows: Qoder CLI juga pakai ~/.qoder/ (di %USERPROFILE%)
+    if sys.platform == "win32" and not os.path.isdir(auth_dir):
+        alt_dir = os.path.join(os.environ.get("USERPROFILE", ""), ".qoder", ".auth")
+        if os.path.isdir(alt_dir) or os.path.isdir(os.path.dirname(alt_dir)):
+            auth_dir = alt_dir
+            auth_file = os.path.join(auth_dir, "user")
+            id_file = os.path.join(auth_dir, "id")
 
     # Backup existing auth
     auth_backup = None
@@ -768,16 +817,27 @@ async def _cli_device_flow(page) -> dict | None:
         debug("Removed existing auth file for fresh login")
 
     try:
-        # Spawn CLI with PTY using 'script' command
-        # The CLI will print the login URL when it can't open browser
+        # Spawn CLI — on Linux use 'script' for PTY, on Windows use cmd directly
         progress("cli_spawn", "Spawning Qoder CLI for device login...")
 
-        proc = subprocess.Popen(
-            ["script", "-qc", f"echo '/login' | {cli_path}", "/dev/null"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env={**os.environ, "TERM": "dumb"},
-        )
+        if sys.platform == "win32":
+            # Windows: CLI prints URL to stderr/stdout without needing PTY
+            # Use cmd /c to pipe /login command
+            shell_cmd = f'echo /login | "{cli_path}"'
+            proc = subprocess.Popen(
+                ["cmd", "/c", shell_cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env={**os.environ},
+            )
+        else:
+            # Linux/macOS: use 'script' for PTY
+            proc = subprocess.Popen(
+                ["script", "-qc", f"echo '/login' | {cli_path}", "/dev/null"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, "TERM": "dumb"},
+            )
 
         login_url = None
         start_time = time.monotonic()
