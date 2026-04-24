@@ -915,47 +915,63 @@ async def _cli_device_flow(page) -> dict | None:
                             debug(f"CLI: {line[:200]}")
 
                     if "selectAccounts" in combined_str:
-                        # URL may be wrapped across multiple lines in terminal output
-                        # Strip ALL escape sequences aggressively
-                        # 1. OSC: \x1b] ... (ST = \x1b\\ or \x07)
-                        clean_for_url = _re.sub(r'\x1b\].*?(?:\x1b\\|\x07)', '', combined_str, flags=_re.DOTALL)
-                        # 2. CSI: \x1b[ ... (letter)
-                        clean_for_url = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean_for_url)
-                        # 3. Any remaining ESC sequences
-                        clean_for_url = _re.sub(r'\x1b[^[]?', '', clean_for_url)
-                        # 4. Remove control chars except newline
-                        clean_for_url = _re.sub(r'[\x00-\x09\x0b-\x1f\x7f]', '', clean_for_url)
-                        # Remove line breaks within URL (lines that continue URL params)
-                        # Join all lines between "https://qoder.com" and "client_id=..." end
+                        # Extract URL from terminal output
+                        # The URL is printed after "copy the following link" message
+                        # and may span multiple lines due to terminal width wrapping
+                        # Use simple string search instead of complex regex
+                        
+                        # First, strip ALL escape sequences with multiple passes
+                        clean = combined_str
+                        # OSC: ESC ] ... (BEL or ST)
+                        while '\x1b]' in clean:
+                            start = clean.index('\x1b]')
+                            # Find terminator: BEL (\x07) or ST (\x1b\\)
+                            end_bel = clean.find('\x07', start)
+                            end_st = clean.find('\x1b\\', start)
+                            ends = [e for e in [end_bel, end_st] if e > start]
+                            if ends:
+                                end = min(ends)
+                                end_len = 1 if end == end_bel else 2
+                                clean = clean[:start] + clean[end + end_len:]
+                            else:
+                                # No terminator found, remove to end of line
+                                nl = clean.find('\n', start)
+                                if nl > start:
+                                    clean = clean[:start] + clean[nl:]
+                                else:
+                                    clean = clean[:start]
+                        # CSI: ESC [ ... letter
+                        import re as _re2
+                        clean = _re2.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean)
+                        # Any remaining ESC
+                        clean = _re2.sub(r'\x1b.', '', clean)
+                        # Control chars except newline/CR
+                        clean = _re2.sub(r'[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]', '', clean)
+                        
+                        # Now find and join URL lines
                         url_lines = []
                         capturing_url = False
-                        for uline in clean_for_url.split('\n'):
+                        for uline in clean.split('\n'):
                             uline = uline.strip()
+                            if not uline:
+                                continue
                             if 'https://qoder.com/device/selectAccounts' in uline:
                                 capturing_url = True
                                 idx = uline.index('https://')
                                 url_lines.append(uline[idx:])
-                            elif capturing_url and uline and not uline.startswith(('Polling', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '⠋', 'Press', '─', '│', '╭', '╰', '?', 'Status')):
-                                url_lines.append(uline)
-                                if 'client_id=' in uline:
-                                    capturing_url = False
-                            else:
-                                if capturing_url and url_lines:
+                            elif capturing_url:
+                                # URL continuation: contains = or & (URL params)
+                                if ('=' in uline or '&' in uline) and not uline.startswith(('Polling', 'Press', 'Status', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '⠋', '─', '│', '╭', '╰', '?', '>')):
+                                    url_lines.append(uline)
+                                    if 'client_id=' in uline:
+                                        capturing_url = False
+                                else:
                                     capturing_url = False
 
                         if url_lines:
                             login_url = ''.join(url_lines).strip()
-                            # Clean any trailing non-URL chars
-                            login_url = _re.sub(r'[\s\x1b\])"\']+$', '', login_url)
                             debug(f"Found login URL: {login_url[:200]}")
                             break
-                        else:
-                            # Fallback: try single-line regex
-                            urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', combined_str)
-                            if urls:
-                                login_url = urls[0]
-                                debug(f"Found login URL (single-line): {login_url[:200]}")
-                                break
                     await asyncio.sleep(1.0)
 
                 read_done.set()
