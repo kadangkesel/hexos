@@ -833,136 +833,106 @@ async def _cli_device_flow(page) -> dict | None:
                     actual_exe = exe_path
                     debug(f"Resolved to actual binary: {actual_exe}")
 
-            # Windows: use winpty from Git for Windows for real PTY interaction
+            # Windows: use pywinpty (ConPTY) for real PTY interaction
             # Bubble Tea TUI requires a real PTY — subprocess stdin pipe doesn't work
             import re as _re
             import threading
 
-            # Strategy 1: Try winpty.exe from Git for Windows
-            winpty_exe = None
-            git_paths = [
-                os.path.join(os.environ.get("ProgramFiles", ""), "Git", "usr", "bin", "winpty.exe"),
-                os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Git", "usr", "bin", "winpty.exe"),
-                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "usr", "bin", "winpty.exe"),
-            ]
-            for gp in git_paths:
-                if os.path.isfile(gp):
-                    winpty_exe = gp
-                    break
-            if not winpty_exe:
-                import shutil as _shutil
-                winpty_exe = _shutil.which("winpty")
+            try:
+                from winpty import PtyProcess
+                debug("Using pywinpty ConPTY for TUI interaction")
 
-            if winpty_exe:
-                debug(f"Using winpty: {winpty_exe}")
-                # winpty provides a real PTY wrapper — TUI works correctly
-                proc = subprocess.Popen(
-                    [winpty_exe, actual_exe],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    env={**os.environ},
-                )
-            else:
-                debug("winpty not found, trying direct subprocess (may not work with TUI)")
-                proc = subprocess.Popen(
-                    [actual_exe],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    env={**os.environ},
-                )
+                pty_proc = PtyProcess.spawn(actual_exe, dimensions=(40, 120))
 
-            # Read output in background thread
-            output_buffer = []
-            read_done = threading.Event()
+                # Read output in background thread
+                output_buffer = []
+                read_done = threading.Event()
 
-            def _reader():
-                while not read_done.is_set():
-                    try:
-                        line = proc.stdout.readline()
-                        if not line:
+                def _reader():
+                    while not read_done.is_set():
+                        try:
+                            data = pty_proc.read(4096)
+                            if data:
+                                output_buffer.append(data)
+                        except EOFError:
                             break
-                        output_buffer.append(line)
-                    except Exception:
-                        break
+                        except Exception:
+                            if read_done.is_set():
+                                break
+                            import traceback
+                            traceback.print_exc()
+                            break
 
-            reader_thread = threading.Thread(target=_reader, daemon=True)
-            reader_thread.start()
+                reader_thread = threading.Thread(target=_reader, daemon=True)
+                reader_thread.start()
 
-            # Wait for TUI to initialize
-            tui_ready = False
-            start_time = time.monotonic()
-            while time.monotonic() - start_time < 15:
-                await asyncio.sleep(0.5)
-                combined = b"".join(output_buffer)
-                combined_str = combined.decode("utf-8", errors="replace")
-                if "Not logged in" in combined_str or "Type your message" in combined_str:
-                    tui_ready = True
-                    break
-
-            if tui_ready:
-                debug("TUI ready, sending /login sequence")
-                await asyncio.sleep(1.0)
-
-                # Send /login + Enter
-                try:
-                    proc.stdin.write(b"/login\r")
-                    proc.stdin.flush()
-                    await asyncio.sleep(1.0)
-
-                    # Tab to select autocomplete + Enter to submit
-                    proc.stdin.write(b"\t")
-                    proc.stdin.flush()
+                # Wait for TUI to initialize
+                tui_ready = False
+                start_time = time.monotonic()
+                while time.monotonic() - start_time < 15:
                     await asyncio.sleep(0.5)
-                    proc.stdin.write(b"\r")
-                    proc.stdin.flush()
-                    await asyncio.sleep(2.0)
-
-                    # Enter to select "Login with browser" (first option)
-                    proc.stdin.write(b"\r")
-                    proc.stdin.flush()
-                    debug("Sent /login + Tab + Enter + Enter")
-                except Exception as e:
-                    debug(f"stdin write error: {e}")
-            else:
-                debug("TUI not ready after 15s, sending /login anyway")
-                try:
-                    proc.stdin.write(b"/login\r")
-                    proc.stdin.flush()
-                    await asyncio.sleep(1.0)
-                    proc.stdin.write(b"\t\r")
-                    proc.stdin.flush()
-                    await asyncio.sleep(2.0)
-                    proc.stdin.write(b"\r")
-                    proc.stdin.flush()
-                except Exception as e:
-                    debug(f"stdin write error: {e}")
-
-            # Wait for login URL in output
-            start_time = time.monotonic()
-            while time.monotonic() - start_time < 40:
-                combined = b"".join(output_buffer)
-                combined_str = combined.decode("utf-8", errors="replace")
-                # Log new lines for debug
-                clean_lines = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', combined_str)
-                for line in clean_lines.split('\n'):
-                    line = line.strip()
-                    if line and line not in output_lines:
-                        output_lines.append(line)
-                        debug(f"CLI: {line[:200]}")
-
-                if "selectAccounts" in combined_str:
-                    urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', combined_str)
-                    if urls:
-                        login_url = urls[0]
-                        debug(f"Found login URL: {login_url[:200]}")
+                    combined_str = "".join(output_buffer)
+                    if "Not logged in" in combined_str or "Type your message" in combined_str:
+                        tui_ready = True
                         break
-                await asyncio.sleep(1.0)
 
-            read_done.set()
-            child = None
-            _cli_proc = proc
+                if tui_ready:
+                    debug("TUI ready, sending /login sequence")
+                    await asyncio.sleep(1.0)
+
+                    # Type /login
+                    pty_proc.write("/login")
+                    await asyncio.sleep(0.5)
+                    # Tab to select autocomplete
+                    pty_proc.write("\t")
+                    await asyncio.sleep(0.5)
+                    # Enter to submit
+                    pty_proc.write("\r")
+                    await asyncio.sleep(2.0)
+                    # Enter to select "Login with browser" (first option)
+                    pty_proc.write("\r")
+                    debug("Sent /login + Tab + Enter + Enter")
+                else:
+                    debug("TUI not ready after 15s, sending /login anyway")
+                    pty_proc.write("/login")
+                    await asyncio.sleep(0.5)
+                    pty_proc.write("\t")
+                    await asyncio.sleep(0.5)
+                    pty_proc.write("\r")
+                    await asyncio.sleep(2.0)
+                    pty_proc.write("\r")
+
+                # Wait for login URL in output
+                start_time = time.monotonic()
+                while time.monotonic() - start_time < 40:
+                    combined_str = "".join(output_buffer)
+                    # Log new lines for debug
+                    clean_lines = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]', '', combined_str)
+                    for line in clean_lines.split('\n'):
+                        line = line.strip()
+                        if line and line not in output_lines:
+                            output_lines.append(line)
+                            debug(f"CLI: {line[:200]}")
+
+                    if "selectAccounts" in combined_str:
+                        urls = _re.findall(r'https://qoder\.com[^\s\x1b\])"\']*selectAccounts[^\s\x1b\])"\']*', combined_str)
+                        if urls:
+                            login_url = urls[0]
+                            debug(f"Found login URL: {login_url[:200]}")
+                            break
+                    await asyncio.sleep(1.0)
+
+                read_done.set()
+                child = None
+                _cli_proc = None
+                _pty_proc = pty_proc
+
+            except ImportError:
+                debug("pywinpty not available — install with: pip install pywinpty")
+                debug("Cannot interact with Qoder CLI TUI on Windows without pywinpty")
+                child = None
+                _cli_proc = None
+                _pty_proc = None
         else:
             # Linux/macOS: use pexpect for reliable PTY interaction
             import pexpect as _pexpect
@@ -970,6 +940,7 @@ async def _cli_device_flow(page) -> dict | None:
 
             child = _pexpect.spawn(cli_path, timeout=60, encoding='utf-8', dimensions=(40, 120))
             _cli_proc = None
+            _pty_proc = None
 
             try:
                 # Wait for TUI ready
@@ -1030,6 +1001,8 @@ async def _cli_device_flow(page) -> dict | None:
                     child.close(force=True)
                 elif _cli_proc:
                     _cli_proc.kill()
+                elif _pty_proc:
+                    _pty_proc.terminate(force=True)
             except Exception:
                 pass
             return None
@@ -1062,12 +1035,15 @@ async def _cli_device_flow(page) -> dict | None:
             # Wait for CLI to complete
             progress("cli_wait", "Waiting for CLI to complete login...")
             for _ in range(30):
-                # Check pexpect child or subprocess
+                # Check pexpect child or subprocess or pty
                 if child:
                     if not child.isalive():
                         break
                 elif _cli_proc:
                     if _cli_proc.poll() is not None:
+                        break
+                elif _pty_proc:
+                    if not _pty_proc.isalive():
                         break
                 # Check if auth file appeared
                 if os.path.exists(auth_file):
@@ -1085,6 +1061,8 @@ async def _cli_device_flow(page) -> dict | None:
                 child.close(force=True)
             elif _cli_proc:
                 _cli_proc.kill()
+            elif _pty_proc:
+                _pty_proc.terminate(force=True)
         except Exception:
             pass
 
