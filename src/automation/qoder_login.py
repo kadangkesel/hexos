@@ -1353,21 +1353,43 @@ async def run_login(email: str, password: str):
             if on_qoder and not on_google:
                 if "/device/" in current_path or "/selectAccounts" in current_path:
                     progress("device_approve", "On device approval page, clicking Continue...")
-                    await asyncio.sleep(2.0)
-                    # Click Continue/Approve button
+                    await asyncio.sleep(3.0)
+                    # Click Continue/Approve button — use CSS selector for Ant Design button
+                    clicked_ok = False
                     for _ in range(10):
                         if os.path.exists(auth_file):
+                            clicked_ok = True
                             break
-                        for text in ["Continue", "Lanjutkan", "Approve", "Confirm"]:
+                        # Try specific CSS selectors first (Ant Design primary button)
+                        for sel in [
+                            'button.ant-btn-primary:has-text("Continue")',
+                            'button.ant-btn-primary:has-text("Lanjutkan")',
+                            'button.ant-btn-primary',
+                            'button:has(span:text("Continue"))',
+                            'button:has(span:text("Lanjutkan"))',
+                        ]:
                             try:
-                                btn = page.get_by_text(text, exact=False).first
-                                if await btn.count() > 0 and await btn.is_visible():
-                                    await btn.click()
-                                    debug(f"Clicked '{text}'")
+                                el = await page.query_selector(sel)
+                                if el and await el.is_visible():
+                                    await el.click()
+                                    debug(f"Clicked button via: {sel}")
                                     await asyncio.sleep(3.0)
+                                    clicked_ok = True
                                     break
                             except Exception:
                                 continue
+                        if clicked_ok:
+                            break
+                        # Fallback: try get_by_role
+                        try:
+                            btn = page.get_by_role("button", name="Continue")
+                            if await btn.count() > 0 and await btn.is_visible():
+                                await btn.click()
+                                debug("Clicked Continue via get_by_role")
+                                clicked_ok = True
+                                break
+                        except Exception:
+                            pass
                         await asyncio.sleep(2.0)
                     # Wait for CLI to pick up the approval
                     for _ in range(15):
@@ -1612,7 +1634,21 @@ async def _start_cli_and_get_url() -> tuple:
         debug("Removed existing auth file for fresh login")
 
     # Suppress CLI from opening external browser
-    cli_env = {**os.environ, "BROWSER": "echo", "DISPLAY": ""}
+    # On Linux: BROWSER=echo prevents xdg-open from launching browser
+    # On Windows: Go's browser.OpenURL uses rundll32/cmd start which ignores BROWSER
+    # Setting BROWSER to a no-op command helps on Linux; Windows needs different approach
+    if sys.platform == "win32":
+        # On Windows, create a dummy batch file that does nothing
+        # Go checks BROWSER env var first before falling back to rundll32
+        noop_bat = os.path.join(os.environ.get("TEMP", "C:\\Windows\\Temp"), "hexos_noop.bat")
+        try:
+            with open(noop_bat, "w") as f:
+                f.write("@echo off\nrem noop\n")
+            cli_env = {**os.environ, "BROWSER": noop_bat}
+        except Exception:
+            cli_env = {**os.environ, "BROWSER": "echo"}
+    else:
+        cli_env = {**os.environ, "BROWSER": "echo", "DISPLAY": ""}
 
     login_url = None
 
