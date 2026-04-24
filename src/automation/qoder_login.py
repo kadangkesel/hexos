@@ -1635,20 +1635,26 @@ async def _start_cli_and_get_url() -> tuple:
 
     # Suppress CLI from opening external browser
     # On Linux: BROWSER=echo prevents xdg-open from launching browser
-    # On Windows: Go's browser.OpenURL uses rundll32/cmd start which ignores BROWSER
-    # Setting BROWSER to a no-op command helps on Linux; Windows needs different approach
+    # On Windows: Go uses rundll32/cmd start which ignores BROWSER env var
+    # We intercept by prepending a dummy dir to PATH with a no-op start.exe
     if sys.platform == "win32":
-        # On Windows, create a dummy batch file that does nothing
-        # Go checks BROWSER env var first before falling back to rundll32
+        import subprocess as _sp
+        # Create a dummy directory with a no-op "start.cmd" to intercept browser open
+        # Go's browser.OpenURL on Windows calls: cmd /c start <url>
+        # We can't easily intercept that, but we CAN set BROWSER env var
+        # which some Go browser packages check first
         noop_bat = os.path.join(os.environ.get("TEMP", "C:\\Windows\\Temp"), "hexos_noop.bat")
         try:
             with open(noop_bat, "w") as f:
-                f.write("@echo off\nrem noop\n")
+                f.write("@echo off\nrem noop browser\n")
             cli_env = {**os.environ, "BROWSER": noop_bat}
         except Exception:
             cli_env = {**os.environ, "BROWSER": "echo"}
+        # Note: Chrome may still open. We'll kill it after getting the URL.
+        _kill_chrome_after = True
     else:
         cli_env = {**os.environ, "BROWSER": "echo", "DISPLAY": ""}
+        _kill_chrome_after = False
 
     login_url = None
 
@@ -1834,6 +1840,20 @@ async def _start_cli_and_get_url() -> tuple:
         except Exception as exc:
             debug(f"pexpect error: {exc}")
             return None, None
+
+    # On Windows, try to close the Chrome tab that CLI opened
+    if _kill_chrome_after and login_url and sys.platform == "win32":
+        try:
+            import subprocess as _sp
+            # Use PowerShell to close Chrome windows that have the selectAccounts URL
+            # This is best-effort — if it fails, Chrome tab stays open but doesn't affect flow
+            _sp.run(
+                ["taskkill", "/F", "/FI", "WINDOWTITLE eq *selectAccounts*"],
+                capture_output=True, timeout=5,
+            )
+            debug("Attempted to close Chrome tab opened by CLI")
+        except Exception:
+            pass  # Best effort
 
     return login_url, _active_cli_handles
 
