@@ -916,8 +916,15 @@ async def _cli_device_flow(page) -> dict | None:
 
                     if "selectAccounts" in combined_str:
                         # URL may be wrapped across multiple lines in terminal output
-                        # Strip ALL escape sequences (CSI, OSC, and other ANSI)
-                        clean_for_url = _re.sub(r'\x1b[\[\]()][^\x07\x1b]*?[\x07\x1b\\a-zA-Z]|\x1b.', '', combined_str)
+                        # Strip ALL escape sequences aggressively
+                        # 1. OSC: \x1b] ... (ST = \x1b\\ or \x07)
+                        clean_for_url = _re.sub(r'\x1b\].*?(?:\x1b\\|\x07)', '', combined_str, flags=_re.DOTALL)
+                        # 2. CSI: \x1b[ ... (letter)
+                        clean_for_url = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean_for_url)
+                        # 3. Any remaining ESC sequences
+                        clean_for_url = _re.sub(r'\x1b[^[]?', '', clean_for_url)
+                        # 4. Remove control chars except newline
+                        clean_for_url = _re.sub(r'[\x00-\x09\x0b-\x1f\x7f]', '', clean_for_url)
                         # Remove line breaks within URL (lines that continue URL params)
                         # Join all lines between "https://qoder.com" and "client_id=..." end
                         url_lines = []
@@ -1009,7 +1016,11 @@ async def _cli_device_flow(page) -> dict | None:
                         break
 
                 # Extract URL — may be wrapped across multiple lines
-                clean_for_url = _re.sub(r'\x1b[\[\]()][^\x07\x1b]*?[\x07\x1b\\a-zA-Z]|\x1b.', '', full_output)
+                # Strip ALL escape sequences aggressively
+                clean_for_url = _re.sub(r'\x1b\].*?(?:\x1b\\|\x07)', '', full_output, flags=_re.DOTALL)
+                clean_for_url = _re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', clean_for_url)
+                clean_for_url = _re.sub(r'\x1b[^[]?', '', clean_for_url)
+                clean_for_url = _re.sub(r'[\x00-\x09\x0b-\x1f\x7f]', '', clean_for_url)
                 url_lines = []
                 capturing_url = False
                 for uline in clean_for_url.split('\n'):
