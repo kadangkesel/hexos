@@ -383,6 +383,7 @@ export function createApp() {
     const labels = listConnections().map((conn) => ({
       provider: conn.provider,
       label: conn.label,
+      status: conn.status,
     }));
     return c.json(labels);
   });
@@ -580,7 +581,42 @@ export function createApp() {
       return c.json({ valid: true, credit: kiroStatus.usage });
     }
     
-    // CodeBuddy
+    // Codex — validate JWT expiry and refresh if needed
+    if (conn.provider === "codex") {
+      const { isCodexTokenExpired, parseCodexToken: parseToken, refreshCodex: doRefresh } = await import("./auth/oauth.ts");
+      
+      // Check if token is expired (with 60s buffer for check, not the 24h proxy buffer)
+      const expired = isCodexTokenExpired(conn.accessToken, 60);
+      
+      if (expired && conn.refreshToken) {
+        try {
+          const refreshed = await doRefresh(conn.refreshToken, conn.id);
+          await updateConnection(conn.id, {
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+          });
+          log.info(`[Check] ${conn.label} (Codex) token refreshed successfully`);
+        } catch (e: any) {
+          log.warn(`[Check] ${conn.label} (Codex) token refresh failed: ${e.message}`);
+          await setConnectionStatus(conn.id, "expired");
+          return c.json({ valid: false, expired: true, reason: "refresh_failed" });
+        }
+      } else if (expired) {
+        log.warn(`[Check] ${conn.label} (Codex) token expired, no refresh token`);
+        await setConnectionStatus(conn.id, "expired");
+        return c.json({ valid: false, expired: true, reason: "token_expired" });
+      }
+      
+      // Parse token for plan info
+      const parsed = parseToken(conn.accessToken);
+      
+      // Ensure status is active
+      if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+      
+      return c.json({ valid: true, email: parsed.email, plan: parsed.planType, credit: conn.credit });
+    }
+    
+    // Service
     const status = await checkToken(conn.accessToken);
     
     // Token invalid - mark expired

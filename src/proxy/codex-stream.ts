@@ -38,9 +38,9 @@ export function buildCodexRequestBody(
   };
 
   if (instructions) body.instructions = instructions;
-  if (openaiBody.temperature !== undefined) body.temperature = openaiBody.temperature;
+  // Note: Codex Responses API does NOT support temperature, top_p, etc.
+  // Only pass parameters that the API accepts.
   if (openaiBody.max_tokens !== undefined) body.max_output_tokens = openaiBody.max_tokens;
-  if (openaiBody.top_p !== undefined) body.top_p = openaiBody.top_p;
   if (openaiBody.reasoning_effort) {
     body.reasoning = { effort: openaiBody.reasoning_effort };
   }
