@@ -84,14 +84,14 @@ function ModelCard({ model, index }: { model: Model; index: number }) {
                 {model.provider}
               </div>
             )}
-            {model.upstreamModel != null && (
+            {/* {model.upstreamModel != null && (
               <div>
                 <span className="font-medium text-foreground/50">
                   Upstream:
                 </span>{" "}
                 <span>{String(model.upstreamModel)}</span>
               </div>
-            )}
+            )} */}
           </div>
         </CardContent>
       </Card>
