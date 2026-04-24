@@ -19,7 +19,7 @@ import {
 const PAGE_LABELS: Record<string, string> = {
   "/": "Dashboard",
   "/accounts": "Accounts",
-  "/qoder": "Qoder",
+  "/auth": "Auth",
   "/models": "Models",
   "/logs": "Logs",
   "/api-key": "API Key",

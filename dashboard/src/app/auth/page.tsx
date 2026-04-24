@@ -103,16 +103,21 @@ export default function QoderPage() {
   return (
     <>
       <PageHeader
-        title="Qoder"
-        subtitle="Connect Qoder accounts (Alibaba Cloud AI) to access 9 models including Qwen, GLM, Kimi, and MiniMax"
+        title="IDE Auth"
+        subtitle="Connect IDE accounts to Hexos. Import credentials from installed IDEs or enter tokens manually."
       />
 
-      {/* Connected Accounts */}
+      {/* Qoder Section */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
       >
+        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <Zap className="size-5" />
+          Qoder
+          <Badge variant="outline" className="text-xs font-normal">Alibaba Cloud</Badge>
+        </h2>
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -123,7 +128,7 @@ export default function QoderPage() {
               )}
             </CardTitle>
             <CardDescription>
-              Qoder accounts currently connected to Hexos
+              Qoder accounts — access 9 models including Qwen, GLM, Kimi, MiniMax
             </CardDescription>
           </CardHeader>
           <CardContent>
