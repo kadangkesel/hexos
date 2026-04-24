@@ -1116,10 +1116,12 @@ async def _cli_device_flow(page) -> dict | None:
 
             # Check if there's an account selection / approve button
             for sel in [
+                'button:has-text("Continue")',
                 'button:has-text("Approve")',
                 'button:has-text("Allow")',
                 'button:has-text("Authorize")',
                 'button:has-text("Confirm")',
+                'button:has-text("Lanjutkan")',
                 '.account-item',
                 '[data-testid="account-select"]',
             ]:
