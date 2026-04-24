@@ -50,12 +50,8 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "qd/glm-5.1":           { provider: "qoder", model: "gm51model",         info: { id: "qd/glm-5.1",           name: "GLM 5.1 (Zhipu)", contextWindow: 180000 } },
   "qd/kimi-k2.6":         { provider: "qoder", model: "kmodel",            info: { id: "qd/kimi-k2.6",         name: "Kimi K2.6 (Moonshot)", contextWindow: 180000 } },
   "qd/minimax-m2.7":      { provider: "qoder", model: "mmodel",            info: { id: "qd/minimax-m2.7",      name: "MiniMax M2.7", contextWindow: 180000 } },
-  // Hidden models (accepted by server, not in API list)
-  "qd/opus-4":            { provider: "qoder", model: "opus-4-20250514",   info: { id: "qd/opus-4",            name: "Opus 4 (Qoder)", contextWindow: 200000 } },
-  "qd/sonnet-4":          { provider: "qoder", model: "sonnet-4-20250514", info: { id: "qd/sonnet-4",          name: "Sonnet 4 (Qoder)", contextWindow: 200000 } },
-  "qd/gpt-5":             { provider: "qoder", model: "gpt-5-0807-global", info: { id: "qd/gpt-5",             name: "GPT-5 (Qoder)", contextWindow: 200000 } },
-  "qd/gpt-4.1":           { provider: "qoder", model: "gpt-4.1",           info: { id: "qd/gpt-4.1",           name: "GPT-4.1 (Qoder)", contextWindow: 200000 } },
-  "qd/o4-mini":           { provider: "qoder", model: "o4-mini",           info: { id: "qd/o4-mini",           name: "o4-mini (Qoder)", contextWindow: 200000 } },
+  // Note: "hidden" model keys (opus-4, gpt-5, etc) are accepted by server but ALL
+  // fallback to Qwen (Alibaba's default). Only the 9 public models above are distinct.
 
   // Kiro models (prefix: kr/) — AWS CodeWhisperer backend
   "kr/claude-sonnet-4.5":    { provider: "kiro", model: "claude-sonnet-4.5",    info: { id: "kr/claude-sonnet-4.5",    name: "Claude Sonnet 4.5 (Kiro)", contextWindow: 200000 } },
