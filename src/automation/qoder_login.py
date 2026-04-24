@@ -983,7 +983,7 @@ async def _cli_device_flow(page) -> dict | None:
                                 # Remove any non-URL chars at the end
                                 url_block = _re.sub(r'[^a-zA-Z0-9\-._~:/?#\[\]@!$&\'()*+,;=%]+$', '', url_block)
                                 login_url = url_block
-                                debug(f"Found login URL: {login_url[:200]}")
+                                debug(f"Found login URL ({len(login_url)} chars): {login_url}")
                         if login_url:
                             break
                     await asyncio.sleep(1.0)
