@@ -76,6 +76,7 @@ function getProviderTag(id: string): string {
   if (id.startsWith("cl/")) return "Cline";
   if (id.startsWith("kr/")) return "Kiro";
   if (id.startsWith("qd/")) return "Qoder";
+  if (id.startsWith("cx/")) return "Codex";
   return "CodeBuddy";
 }
 
@@ -84,6 +85,7 @@ const PROVIDER_BADGE: Record<string, string> = {
   Cline: "bg-emerald-500/15 text-emerald-500",
   Kiro: "bg-sky-500/15 text-sky-500",
   Qoder: "bg-violet-500/15 text-violet-500",
+  Codex: "bg-emerald-600/15 text-emerald-600",
 };
 
 const PROVIDER_SHORT: Record<string, string> = {
@@ -91,6 +93,7 @@ const PROVIDER_SHORT: Record<string, string> = {
   Cline: "CL",
   Kiro: "KR",
   Qoder: "QD",
+  Codex: "CX",
 };
 
 /* ------------------------------------------------------------------ */
@@ -125,7 +128,7 @@ function SlotSelector({
   });
 
   // Sort: CodeBuddy first, then Cline, then Kiro, then Qoder
-  const order = ["CodeBuddy", "Cline", "Kiro", "Qoder"];
+  const order = ["CodeBuddy", "Cline", "Kiro", "Qoder", "Codex"];
   options.sort((a, b) => order.indexOf(a.provider) - order.indexOf(b.provider));
 
   return (
