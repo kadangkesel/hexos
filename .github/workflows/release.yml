@@ -81,11 +81,22 @@ jobs:
         env:
           NEXT_STATIC_EXPORT: "true"
 
+      # Get version from tag or manual input (needed before compile)
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "version=${{ github.event.inputs.tag }}" | sed 's/^v//' >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
       # Compile server binary
       - name: Compile server binary
         run: |
           mkdir -p dist/${{ matrix.target }}
-          bun build src/index.ts --compile --target ${{ matrix.bun-target }} --outfile dist/${{ matrix.target }}/${{ matrix.binary-name }}
+          bun build src/index.ts --compile --target ${{ matrix.bun-target }} --define __HEXOS_VERSION__=\"${{ steps.version.outputs.version }}\" --outfile dist/${{ matrix.target }}/${{ matrix.binary-name }}
 
       # Copy dashboard files
       - name: Copy dashboard files
@@ -102,17 +113,6 @@ jobs:
           cp src/automation/kiro_login.py dist/${{ matrix.target }}/automation/ || true
           cp src/automation/setup.py dist/${{ matrix.target }}/automation/ || true
           cp src/automation/requirements.txt dist/${{ matrix.target }}/automation/ || true
-        shell: bash
-
-      # Get version from tag or manual input
-      - name: Get version
-        id: version
-        run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "version=${{ github.event.inputs.tag }}" | sed 's/^v//' >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-          fi
         shell: bash
 
       # Create archive (tar.gz for Unix, zip for Windows)
