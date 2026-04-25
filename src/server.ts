@@ -916,8 +916,12 @@ export function createApp() {
     const conns = listConnections();
     let removed = 0;
     for (const conn of conns) {
-      const credit = conn.credit as { remainingCredits?: number } | undefined;
-      const isExhausted = conn.status === "disabled" && credit && (credit.remainingCredits ?? 0) <= 0;
+      if (conn.status === "expired") continue; // not exhausted, just invalid token
+      const credit = conn.credit as { totalCredits?: number; remainingCredits?: number } | undefined;
+      const rem = Number(credit?.remainingCredits ?? -1);
+      const tot = Number(credit?.totalCredits ?? 0);
+      // Match dashboard getStatus() logic: disabled+credit=0 OR active+credit=0 (with known total)
+      const isExhausted = (conn.status === "disabled" && rem === 0) || (rem === 0 && tot > 0);
       if (isExhausted) {
         await removeConnection(conn.id);
         removed++;
