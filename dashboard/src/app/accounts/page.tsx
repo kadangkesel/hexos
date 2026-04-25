@@ -981,7 +981,7 @@ export default function AccountsPage() {
       <PageHeader title="Accounts" subtitle="Manage connected accounts" />
 
       {/* ---- Summary Stats ---- */}
-      {stats && (stats.totalExhausted > 0 || stats.totalBanned > 0 || stats.totalExpired > 0) && (
+      {stats && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
