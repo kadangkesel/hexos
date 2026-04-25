@@ -137,14 +137,21 @@ for (const target of targets) {
   mkdirSync(join(DIST, target), { recursive: true });
 
   // Bun compile
-  const compileResult = Bun.spawnSync([
+  const compileArgs = [
     "bun", "build",
     join(ROOT, "src", "index.ts"),
     "--compile",
     "--target", platform.bunTarget,
     "--define", `__HEXOS_VERSION__="${VERSION}"`,
     "--outfile", binaryPath,
-  ], {
+  ];
+
+  // Hide console window on Windows so Task Scheduler doesn't spawn a visible terminal
+  if (target.startsWith("windows")) {
+    compileArgs.push("--windows-hide-console");
+  }
+
+  const compileResult = Bun.spawnSync(compileArgs, {
     cwd: ROOT,
     stdio: ["inherit", "inherit", "inherit"],
   });

@@ -96,7 +96,11 @@ jobs:
       - name: Compile server binary
         run: |
           mkdir -p dist/${{ matrix.target }}
-          bun build src/index.ts --compile --target ${{ matrix.bun-target }} --define __HEXOS_VERSION__=\"${{ steps.version.outputs.version }}\" --outfile dist/${{ matrix.target }}/${{ matrix.binary-name }}
+          HIDE_CONSOLE=""
+          if [ "${{ matrix.target }}" = "windows-x64" ]; then
+            HIDE_CONSOLE="--windows-hide-console"
+          fi
+          bun build src/index.ts --compile --target ${{ matrix.bun-target }} --define __HEXOS_VERSION__=\"${{ steps.version.outputs.version }}\" $HIDE_CONSOLE --outfile dist/${{ matrix.target }}/${{ matrix.binary-name }}
 
       # Copy dashboard files
       - name: Copy dashboard files

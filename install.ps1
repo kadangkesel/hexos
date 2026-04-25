@@ -160,15 +160,27 @@ function Main {
         $pathAdded = Add-ToPath $BinDir
         Write-Ok "Installed to: $BinDir\hexos.exe"
 
-        # Setup Windows startup task
+        # Setup Windows startup task (hidden — no visible terminal window)
         Write-Info "Setting up startup task..."
         $hexosExe = Join-Path $BinDir "hexos.exe"
+
+        # Create a VBScript launcher that starts hexos completely hidden (window style 0)
+        # Belt-and-suspenders: binary is compiled with --windows-hide-console,
+        # but the VBS wrapper guarantees no flash even on edge-case Windows configs
+        $vbsLauncher = Join-Path $HexosDir "hexos-launcher.vbs"
+        $vbsContent = @"
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run """$hexosExe"" start", 0, False
+"@
+        Set-Content -Path $vbsLauncher -Value $vbsContent -Encoding ASCII
+
         $taskCreated = $false
         try {
             # Remove old task if exists
             Unregister-ScheduledTask -TaskName "Hexos" -Confirm:$false -ErrorAction SilentlyContinue
 
-            $action = New-ScheduledTaskAction -Execute $hexosExe -Argument "start"
+            # Launch via wscript.exe running the VBS launcher — zero visible UI
+            $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument """$vbsLauncher"""
             # Use DOMAIN\Username format — bare username fails on many Windows configs
             $currentUser = "$env:USERDOMAIN\$env:USERNAME"
             $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
@@ -178,7 +190,7 @@ function Main {
             # Start it now
             Start-ScheduledTask -TaskName "Hexos" -ErrorAction SilentlyContinue
             $taskCreated = $true
-            Write-Ok "Startup task created (runs at login, auto-restarts on failure)"
+            Write-Ok "Startup task created (runs at login, hidden, auto-restarts on failure)"
         }
         catch {
             Write-Warn "Could not create startup task: $_"
@@ -188,8 +200,8 @@ function Main {
         # If scheduled task failed or wasn't created, start as background process
         if (-not $taskCreated) {
             try {
-                Start-Process -FilePath $hexosExe -ArgumentList "start" -WindowStyle Hidden
-                Write-Ok "Hexos started as background process"
+                Start-Process -FilePath "wscript.exe" -ArgumentList """$vbsLauncher""" -WindowStyle Hidden
+                Write-Ok "Hexos started as hidden background process"
                 Write-Warn "Note: hexos won't auto-start at login. Run manually: hexos start"
             }
             catch {
