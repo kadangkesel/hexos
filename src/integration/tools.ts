@@ -350,7 +350,7 @@ const handlers: Record<string, ToolHandler> = {
       // Add provider tag to model names
       const taggedModels: Record<string, { name: string }> = {};
       for (const [id, val] of Object.entries(models)) {
-        const tag = id.startsWith("cl/") ? "(Cline)" : id.startsWith("kr/") ? "(Kiro)" : id.startsWith("qd/") ? "(Qoder)" : "(CodeBuddy)";
+        const tag = id.startsWith("cl/") ? "(Cline)" : id.startsWith("kr/") ? "(Kiro)" : id.startsWith("qd/") ? "(Qoder)" : id.startsWith("cx/") ? "(Codex)" : "(CodeBuddy)";
         taggedModels[id] = { name: `${val.name} ${tag}` };
       }
       return {
@@ -398,7 +398,7 @@ const handlers: Record<string, ToolHandler> = {
       // Build agents.defaults.models with hexos/prefix and provider tag alias
       const modelsMap: Record<string, { alias: string }> = {};
       for (const m of modelsList) {
-        const tag = m.id.startsWith("cl/") ? "CL" : m.id.startsWith("kr/") ? "KR" : m.id.startsWith("qd/") ? "QD" : "CB";
+        const tag = m.id.startsWith("cl/") ? "CL" : m.id.startsWith("kr/") ? "KR" : m.id.startsWith("qd/") ? "QD" : m.id.startsWith("cx/") ? "CX" : "CB";
         modelsMap[`hexos/${m.id}`] = { alias: `${m.name} (${tag})` };
       }
 
