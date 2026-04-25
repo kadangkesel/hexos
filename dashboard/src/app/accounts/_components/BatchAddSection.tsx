@@ -186,7 +186,7 @@ export function BatchAddSection() {
 
             {isRunning ? (
               <Button
-                variant="high-impact"
+                variant="destructive"
                 disabled={cancelling}
                 onClick={async () => {
                   if (taskId && !cancelling) {

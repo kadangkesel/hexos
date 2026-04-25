@@ -252,7 +252,7 @@ export function FilterUnconnectedSection() {
             <div className="ml-auto flex gap-2">
               {isRunning ? (
                 <Button
-                  variant="high-impact"
+                  variant="destructive"
                   size="sm"
                   disabled={cancelling}
                   onClick={async () => {
