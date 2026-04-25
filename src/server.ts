@@ -22,11 +22,20 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PKG_VERSION: string = (() => {
+  // When compiled with bun build --compile, __dirname doesn't point to source.
+  // Try reading package.json, fallback to build-time injected version.
   try {
     const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
     return pkg.version ?? "0.0.0";
   } catch {
-    return "0.0.0";
+    try {
+      // Try adjacent to binary
+      const pkg = JSON.parse(readFileSync(join(__dirname, "package.json"), "utf-8"));
+      return pkg.version ?? "0.0.0";
+    } catch {
+      // Hardcoded fallback — update on each release
+      return "0.3.1";
+    }
   }
 })();
 
