@@ -347,11 +347,12 @@ const handlers: Record<string, ToolHandler> = {
       } else {
         models = buildAllModels();
       }
-      // Add provider tag to model names
+      // Add provider tag to model names (skip if name already contains the tag)
       const taggedModels: Record<string, { name: string }> = {};
       for (const [id, val] of Object.entries(models)) {
         const tag = id.startsWith("cl/") ? "(Cline)" : id.startsWith("kr/") ? "(Kiro)" : id.startsWith("qd/") ? "(Qoder)" : id.startsWith("cx/") ? "(Codex)" : "(CodeBuddy)";
-        taggedModels[id] = { name: `${val.name} ${tag}` };
+        const name = val.name.includes(tag) ? val.name : `${val.name} ${tag}`;
+        taggedModels[id] = { name };
       }
       return {
         provider: {
@@ -399,7 +400,10 @@ const handlers: Record<string, ToolHandler> = {
       const modelsMap: Record<string, { alias: string }> = {};
       for (const m of modelsList) {
         const tag = m.id.startsWith("cl/") ? "CL" : m.id.startsWith("kr/") ? "KR" : m.id.startsWith("qd/") ? "QD" : m.id.startsWith("cx/") ? "CX" : "CB";
-        modelsMap[`hexos/${m.id}`] = { alias: `${m.name} (${tag})` };
+        const longTag = m.id.startsWith("cl/") ? "(Cline)" : m.id.startsWith("kr/") ? "(Kiro)" : m.id.startsWith("qd/") ? "(Qoder)" : m.id.startsWith("cx/") ? "(Codex)" : "(CodeBuddy)";
+        // Skip tag if name already contains it
+        const alias = m.name.includes(longTag) || m.name.includes(`(${tag})`) ? m.name : `${m.name} (${tag})`;
+        modelsMap[`hexos/${m.id}`] = { alias };
       }
 
       const defaultModel = modelMap?.model || "cb/claude-opus-4.6";
