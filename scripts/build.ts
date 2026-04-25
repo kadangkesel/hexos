@@ -142,6 +142,7 @@ for (const target of targets) {
     join(ROOT, "src", "index.ts"),
     "--compile",
     "--target", platform.bunTarget,
+    "--define", `__HEXOS_VERSION__="${VERSION}"`,
     "--outfile", binaryPath,
   ], {
     cwd: ROOT,

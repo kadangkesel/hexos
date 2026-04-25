@@ -21,22 +21,26 @@ import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Declared by bun build --define at compile time, falls back for dev mode
+declare const __HEXOS_VERSION__: string | undefined;
+
 const PKG_VERSION: string = (() => {
-  // When compiled with bun build --compile, __dirname doesn't point to source.
-  // Try reading package.json, fallback to build-time injected version.
-  try {
-    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
-    return pkg.version ?? "0.0.0";
-  } catch {
+  // 1. Build-time injected (compiled binary)
+  if (typeof __HEXOS_VERSION__ !== "undefined") return __HEXOS_VERSION__;
+  // 2. Read from package.json (dev mode)
+  const candidates = [
+    join(__dirname, "..", "package.json"),
+    join(__dirname, "package.json"),
+    join(process.cwd(), "package.json"),
+  ];
+  for (const p of candidates) {
     try {
-      // Try adjacent to binary
-      const pkg = JSON.parse(readFileSync(join(__dirname, "package.json"), "utf-8"));
-      return pkg.version ?? "0.0.0";
-    } catch {
-      // Hardcoded fallback — update on each release
-      return "0.3.1";
-    }
+      const pkg = JSON.parse(readFileSync(p, "utf-8"));
+      if (pkg.version) return pkg.version;
+    } catch {}
   }
+  return "unknown";
 })();
 
 // Track batch connect tasks
