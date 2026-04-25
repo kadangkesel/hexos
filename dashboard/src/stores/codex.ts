@@ -43,6 +43,7 @@ interface CodexState {
   startOAuth: () => Promise<{ ok: boolean; authUrl?: string; error?: string }>;
   exchangeCode: (code: string) => Promise<{ ok: boolean; error?: string; email?: string }>;
   removeConnection: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  checkUsage: (id: string) => Promise<{ ok: boolean; valid?: boolean; error?: string }>;
 }
 
 export const useCodexStore = create<CodexState>((set, get) => ({
@@ -150,6 +151,19 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       await apiFetch(`/api/connections/${id}`, { method: "DELETE" });
       await get().fetchConnections();
       return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  },
+
+  checkUsage: async (id) => {
+    try {
+      const res = await apiFetch<{ valid?: boolean; error?: string; reason?: string; credit?: unknown }>(`/api/codex/check-usage/${id}`, { method: "POST" });
+      await get().fetchConnections();
+      if (res.valid === false) {
+        return { ok: false, valid: false, error: res.reason || res.error || "Token invalid" };
+      }
+      return { ok: true, valid: true };
     } catch (e: any) {
       return { ok: false, error: e.message };
     }

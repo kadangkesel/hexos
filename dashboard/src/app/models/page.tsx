@@ -2,14 +2,31 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useModelsStore, type Model } from "@/stores/models";
-import { Search, Copy, Check, Loader2 } from "lucide-react";
+import { Search, Copy, Check, Loader2, Brain } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "motion/react";
-import { cn } from "@/lib/utils";
+// utilities
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+// Lobehub icons (Mono by default; Avatar variant exposed optionally)
+import {
+  Tencent,
+  Codex,
+  Qoder,
+  Cline,
+  Aws,
+  Anthropic,
+  OpenAI,
+  Gemini,
+  DeepSeek,
+  Kimi,
+  ChatGLM,
+  Minimax,
+  Grok,
+  Qwen,
+} from "@lobehub/icons";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -30,6 +47,21 @@ function formatContextWindow(value: unknown): string | null {
 /*  Model Card                                                         */
 /* ------------------------------------------------------------------ */
 
+function mapModelNameToIcon(name: string): any {
+  const s = String(name ?? "").toLowerCase();
+  if (s.includes("claude") || s.includes("anthropic")) return Anthropic;
+  if (s.includes("gpt") || s.includes("codex") || s.includes("codebuddy default")) return OpenAI;
+  if (s.includes("gemini") || s.includes("gemma")) return Gemini;
+  if (s.includes("deepseek")) return DeepSeek;
+  if (s.includes("kimi")) return Kimi;
+  if (s.includes("glm")) return ChatGLM;
+  if (s.includes("minimax")) return Minimax;
+  if (s.includes("grok")) return Grok;
+  if (s.includes("qwen") || s.includes("qoder")) return Qwen;
+  // Fallback to Brain icon (lucide) for unknown models
+  return Brain;
+}
+
 function ModelCard({ model, index }: { model: Model; index: number }) {
   const [copied, setCopied] = useState(false);
 
@@ -44,7 +76,10 @@ function ModelCard({ model, index }: { model: Model; index: number }) {
     }
   }, [model.id]);
 
-  const contextWindow = formatContextWindow(model.contextWindow);
+  const contextWindow = formatContextWindow((model as any).contextWindow);
+
+  // Icon for the model — use Mono (default) variant, no background
+  const IconElement = mapModelNameToIcon(model.name);
 
   return (
     <motion.div
@@ -54,8 +89,14 @@ function ModelCard({ model, index }: { model: Model; index: number }) {
     >
       <Card>
         <CardHeader>
-          <div className="flex items-start justify-between gap-2">
-            <CardTitle className="font-semibold">{model.name}</CardTitle>
+          <div className="flex items-center justify-between gap-2 w-full">
+            <div className="flex items-center gap-3">
+              <IconElement className="size-6 shrink-0" />
+              <div className="flex flex-col">
+                <CardTitle className="font-semibold">{model.name}</CardTitle>
+                <span className="text-xs text-muted-foreground">{model.id}</span>
+              </div>
+            </div>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -70,28 +111,18 @@ function ModelCard({ model, index }: { model: Model; index: number }) {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <code className="rounded bg-muted px-2 py-1 text-sm font-mono text-muted-foreground w-fit">
-            {model.id}
-          </code>
-
-          <div className="flex flex-col gap-1 text-sm text-muted-foreground">
-            {model.provider && (
-              <div>
-                <span className="font-medium text-foreground/50">
-                  Provider:
-                </span>{" "}
-                {model.provider}
-              </div>
+        <CardContent>
+          <div className="flex items-center gap-2">
+            {contextWindow && (
+              <Badge variant="secondary">
+                {contextWindow} ctx
+              </Badge>
             )}
-            {/* {model.upstreamModel != null && (
-              <div>
-                <span className="font-medium text-foreground/50">
-                  Upstream:
-                </span>{" "}
-                <span>{String(model.upstreamModel)}</span>
-              </div>
-            )} */}
+            {model.provider && (
+              <Badge variant="outline" className="text-[10px]">
+                {model.provider}
+              </Badge>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -111,7 +142,8 @@ export default function ModelsPage() {
     fetch();
   }, [fetch]);
 
-  const filtered = models.filter((m) => {
+  // Flat filtered list for search mode
+  const filteredFlat = models.filter((m) => {
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -120,6 +152,25 @@ export default function ModelsPage() {
       (m.provider && m.provider.toLowerCase().includes(q))
     );
   });
+
+  // Group models by provider for the non-search view
+  const groups: Record<string, Model[]> = {};
+  if (!loading && !error) {
+    for (const m of models) {
+      const p = (m as any).provider || "";
+      if (!groups[p]) groups[p] = [];
+      groups[p].push(m);
+    }
+  }
+
+  // Provider metadata for header icons and display names
+  const PROVIDER_META: Record<string, { label: string; Icon: any }> = {
+    codebuddy: { label: "CodeBuddy", Icon: Tencent },
+    cline: { label: "Cline", Icon: Cline },
+    kiro: { label: "Kiro", Icon: Aws },
+    qoder: { label: "Qoder", Icon: Qoder },
+    codex: { label: "Codex", Icon: Codex },
+  };
 
   return (
     <div>
@@ -162,19 +213,49 @@ export default function ModelsPage() {
       )}
 
       {/* Empty state */}
-      {!loading && !error && filtered.length === 0 && (
+      {!loading && !error && (search ? filteredFlat.length === 0 : models.length === 0) && (
         <div className="text-center py-12 text-muted-foreground">
           {search ? "No models match your search." : "No models available."}
         </div>
       )}
 
       {/* Model cards grid */}
-      {!loading && filtered.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((model, i) => (
-            <ModelCard key={model.id} model={model} index={i} />
-          ))}
-        </div>
+      {!loading && (
+        <>
+          {search ? (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {filteredFlat.map((model, i) => (
+                <ModelCard key={model.id} model={model} index={i} />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {(() => {
+                let idx = 0;
+                return Object.entries(groups).map(([providerKey, list]) => {
+                  if (!list || list.length === 0) return null;
+                  const meta = PROVIDER_META[providerKey] ?? { label: providerKey, Icon: Brain };
+                  const ProviderIcon = meta.Icon;
+                  return (
+                    <section key={providerKey} aria-label={`${meta.label} models`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 text-lg font-semibold text-foreground/90">
+                          <ProviderIcon className="size-5" />
+                          <span>{meta.label} ({list.length} models)</span>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                        {list.map((m) => (
+                          <ModelCard key={m.id} model={m} index={idx++} />
+                        ))}
+                      </div>
+                    </section>
+                  );
+                });
+              })()}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

@@ -347,16 +347,17 @@ export async function checkQoderStatus(
   machineToken?: string,
 ): Promise<{ valid: boolean; plan?: string; isQuotaExceeded?: boolean; email?: string; nextResetAt?: number }> {
   try {
+    const mId = crypto.randomUUID();
     const mToken = machineToken || crypto.randomUUID().replace(/-/g, "").substring(0, 28);
+    const mType = crypto.createHash("md5").update(mId).digest("hex").substring(0, 18);
     const requestId = crypto.randomUUID();
     const path = "/api/v3/user/status";
     const fullPath = `/algo${path}`;
 
-    const { signature, timestamp } = generateSignature("POST", path, requestId, mToken, "", COSY_VERSION);
-
     const auth = generateBearerToken(userInfo, fullPath, "{}");
 
-    const res = await fetch(`https://center.qoder.sh${fullPath}?Encode=1`, {
+    // No ?Encode=1 — send plaintext body (matches proxy request pattern)
+    const res = await fetch(`https://center.qoder.sh${fullPath}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -368,7 +369,9 @@ export async function checkQoderStatus(
         "Cosy-Key": auth.cosyKey,
         "Cosy-Date": auth.cosyDate.toString(),
         "Cosy-Version": COSY_VERSION,
+        "Cosy-MachineId": mId,
         "Cosy-MachineToken": mToken,
+        "Cosy-MachineType": mType,
         "Cosy-ClientType": "5",
         "Cosy-Data-Policy": "AGREE",
         "X-Request-Id": requestId,
@@ -376,7 +379,14 @@ export async function checkQoderStatus(
       body: "{}",
     });
 
-    if (!res.ok) return { valid: false };
+    if (!res.ok) {
+      // Status endpoint may be unreliable — log but don't treat as invalid
+      // The actual inference endpoint may still work fine
+      let body = "";
+      try { body = await res.text(); } catch {}
+      console.warn(`[Qoder checkStatus] HTTP ${res.status} from status endpoint: ${body.slice(0, 200)}`);
+      return { valid: false };
+    }
 
     const data = await res.json() as any;
     return {
@@ -386,7 +396,8 @@ export async function checkQoderStatus(
       email: data.email || userInfo.email,
       nextResetAt: data.nextResetAt,
     };
-  } catch {
+  } catch (err) {
+    console.warn(`[Qoder checkStatus] Exception: ${err instanceof Error ? err.message : err}`);
     return { valid: false };
   }
 }

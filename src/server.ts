@@ -538,15 +538,18 @@ export function createApp() {
       return c.json({ valid: true, uid, balance, credit: { totalCredits: balance, remainingCredits: balance } });
     }
     
-    // Qoder
+    // Qoder — status endpoint is unreliable, don't mark expired on check failure
     if (conn.provider === "qoder") {
       const { checkQoderToken } = await import("./auth/oauth.ts");
       const qoderStatus = await checkQoderToken(conn.accessToken, conn.uid || "");
       
       if (!qoderStatus.valid) {
-        log.warn(`[Check] ${conn.label} (Qoder) token invalid — marking expired`);
-        await setConnectionStatus(conn.id, "expired");
-        return c.json({ valid: false, expired: true, reason: "token_invalid" });
+        // Status endpoint failed but inference may still work — reactivate if was wrongly expired
+        log.warn(`[Check] ${conn.label} (Qoder) status check failed — reactivating (inference may still work)`);
+        if (conn.status === "expired") {
+          await setConnectionStatus(conn.id, "active");
+        }
+        return c.json({ valid: true, reason: "status_check_unreliable", note: "Qoder status endpoint may fail but inference still works" });
       }
       
       // Update credit info
@@ -805,17 +808,18 @@ export function createApp() {
             credit: { totalCredits: balance, remainingCredits: balance, usedCredits: 0, packageName: "Cline", expiresAt: "" },
           };
         } else if (conn.provider === "qoder") {
-          // Qoder: check token + quota status
+          // Qoder: status endpoint is unreliable — don't mark expired on failure
           const { checkQoderToken } = await import("./auth/oauth.ts");
           const qoderStatus = await checkQoderToken(conn.accessToken, conn.uid || "");
           
           if (!qoderStatus.valid) {
-            if (conn.status !== "expired") {
-              await setConnectionStatus(conn.id, "expired");
-              expiredCount++;
-              log.warn(`[Check credits] ${conn.label} (Qoder) token invalid — marked expired`);
+            // Status check failed but inference may still work — reactivate if wrongly expired
+            log.warn(`[Check credits] ${conn.label} (Qoder) status check failed — reactivating (inference may still work)`);
+            if (conn.status === "expired") {
+              await setConnectionStatus(conn.id, "active");
+              reactivatedCount++;
             }
-            results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
+            results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: true, reason: "status_check_unreliable" });
             return;
           }
           
@@ -1294,6 +1298,151 @@ export function createApp() {
       });
     } catch (err: any) {
       return c.json({ error: err.message || "Import failed" }, 500);
+    }
+  });
+
+  // --- Codex: Import from CLI (~/.codex/auth.json) ---
+  app.post("/api/codex/import-cli", async (c) => {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const { homedir } = require("os");
+
+      const codexHome = process.env.CODEX_HOME || path.join(homedir(), ".codex");
+      const authPath = path.join(codexHome, "auth.json");
+
+      if (!fs.existsSync(authPath)) {
+        return c.json({ error: `Codex CLI auth not found at ${authPath}. Run 'codex login' first.` }, 400);
+      }
+
+      const raw = JSON.parse(fs.readFileSync(authPath, "utf8"));
+
+      // Modern format: { tokens: { access_token, refresh_token, account_id } }
+      // Legacy format: { accessToken, accountId }
+      let accessToken: string | undefined;
+      let refreshToken: string | undefined;
+
+      if (raw.tokens?.access_token) {
+        accessToken = raw.tokens.access_token;
+        refreshToken = raw.tokens.refresh_token;
+      } else if (raw.accessToken) {
+        accessToken = raw.accessToken;
+        refreshToken = raw.refreshToken;
+      }
+
+      if (!accessToken) {
+        return c.json({ error: "No access token found in Codex CLI auth file" }, 400);
+      }
+      if (!refreshToken) {
+        return c.json({ error: "No refresh token found in Codex CLI auth file (required for token rotation)" }, 400);
+      }
+
+      const parsed = parseCodexToken(accessToken);
+      const conn = await saveConnection({
+        provider: "codex",
+        label: parsed.email || "Codex CLI",
+        accessToken,
+        refreshToken,
+        uid: parsed.userId,
+      });
+
+      log.ok(`[Codex CLI] Imported: ${parsed.email || conn.id}`);
+      return c.json({
+        success: true,
+        connection: { id: conn.id, email: parsed.email, plan: parsed.planType },
+      });
+    } catch (err: any) {
+      return c.json({ error: err.message || "Failed to import from Codex CLI" }, 500);
+    }
+  });
+
+  // --- Codex: Check usage (rate limits) for a single connection ---
+  app.post("/api/codex/check-usage/:id", async (c) => {
+    const id = c.req.param("id");
+    const conn = listConnections().find((cn) => cn.id === id && cn.provider === "codex");
+    if (!conn) return c.json({ error: "Codex connection not found" }, 404);
+
+    try {
+      const { isCodexTokenExpired, refreshCodex } = await import("./auth/oauth.ts");
+      const { extractCodexRateLimits } = await import("./proxy/codex-stream.ts");
+      const { updateConnection } = await import("./auth/store.ts");
+
+      // Refresh token if expired
+      let accessToken = conn.accessToken;
+      if (isCodexTokenExpired(accessToken, 60)) {
+        if (!conn.refreshToken) {
+          await setConnectionStatus(conn.id, "expired");
+          return c.json({ valid: false, reason: "token_expired_no_refresh" });
+        }
+        try {
+          const refreshed = await refreshCodex(conn.refreshToken, conn.id);
+          await updateConnection(conn.id, {
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+          });
+          accessToken = refreshed.accessToken;
+          log.info(`[Check usage] ${conn.label} (Codex) token refreshed`);
+        } catch (e: any) {
+          await setConnectionStatus(conn.id, "expired");
+          return c.json({ valid: false, reason: "refresh_failed", error: e.message });
+        }
+      }
+
+      // Make a minimal Codex API request to get rate limit headers
+      const res = await fetch("https://chatgpt.com/backend-api/codex/responses", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream",
+          "User-Agent": "codex-cli/0.124.0",
+        },
+        body: JSON.stringify({
+          model: "gpt-5.4-mini",
+          instructions: "",
+          input: "hi",
+          stream: true,
+          max_output_tokens: 1,
+        }),
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        await setConnectionStatus(conn.id, "expired");
+        return c.json({ valid: false, reason: "token_invalid" });
+      }
+
+      // Extract rate limits from headers
+      const rateLimits = extractCodexRateLimits(res.headers);
+
+      // Abort the stream body — we only need headers
+      try { res.body?.cancel(); } catch {}
+
+      // Update connection credit data
+      const credit = {
+        totalCredits: 100,
+        remainingCredits: 100 - rateLimits.primaryUsedPercent,
+        usedCredits: rateLimits.primaryUsedPercent,
+        packageName: `ChatGPT ${rateLimits.planType}`,
+        expiresAt: rateLimits.primaryResetAt ? new Date(rateLimits.primaryResetAt * 1000).toISOString() : "",
+        fetchedAt: Date.now(),
+        primaryUsedPercent: rateLimits.primaryUsedPercent,
+        primaryWindowMinutes: rateLimits.primaryWindowMinutes,
+        primaryResetAt: rateLimits.primaryResetAt,
+        secondaryUsedPercent: rateLimits.secondaryUsedPercent,
+        secondaryWindowMinutes: rateLimits.secondaryWindowMinutes,
+        secondaryResetAt: rateLimits.secondaryResetAt,
+      };
+      await updateConnection(conn.id, { credit } as any);
+
+      // Reactivate if was expired
+      if (conn.status !== "active") {
+        await setConnectionStatus(conn.id, "active");
+      }
+
+      return c.json({ valid: true, credit, planType: rateLimits.planType });
+    } catch (err: any) {
+      log.error(`[Check usage] ${conn.label} (Codex) error: ${err.message}`);
+      return c.json({ error: err.message || "Check failed" }, 500);
     }
   });
 

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { motion } from "motion/react";
+import { Codex, Qoder } from '@lobehub/icons';
 import {
   Zap,
   Brain,
@@ -27,7 +28,6 @@ interface ProviderCard {
   icon: React.ElementType;
   href: string;
   badge?: string;
-  color: string;
 }
 
 const providers: ProviderCard[] = [
@@ -35,19 +35,17 @@ const providers: ProviderCard[] = [
     id: "codex",
     name: "Codex",
     description: "OpenAI — GPT-5.5, GPT-5.4, GPT-5.3 Codex models via ChatGPT. Free with ChatGPT Plus subscription.",
-    icon: Brain,
+    icon: Codex.Color,
     href: "/providers/codex",
-    badge: "6 models",
-    color: "text-emerald-500",
+    badge: "6 models"
   },
   {
     id: "qoder",
     name: "Qoder",
     description: "Alibaba Cloud — Qwen, GLM, Kimi, MiniMax models. Google OAuth, CLI import, IDE import, or manual token.",
-    icon: Zap,
+    icon: Qoder.Color,
     href: "/providers/qoder",
-    badge: "9 models",
-    color: "text-amber-500",
+    badge: "9 models"
   },
 ];
 
@@ -85,11 +83,11 @@ export default function ProvidersPage() {
               <Card className="h-full transition-colors group-hover:border-primary/50">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <p.icon className={`size-5 ${p.color}`} />
+                    <CardTitle className="flex items-center gap-2 text-2xl font-semibold">
+                      <p.icon className={`size-8`} />
                       {p.name}
                     </CardTitle>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center  gap-2">
                       {(counts[p.id] ?? 0) > 0 && (
                         <Badge variant="secondary" className="gap-1">
                           <Users className="size-3" />
@@ -103,7 +101,7 @@ export default function ProvidersPage() {
                       )}
                     </div>
                   </div>
-                  <CardDescription className="text-xs leading-relaxed">
+                  <CardDescription className="text-xs mt-2 leading-relaxed">
                     {p.description}
                   </CardDescription>
                 </CardHeader>

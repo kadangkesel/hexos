@@ -32,6 +32,9 @@ dashboard/out/
 
 
 
+# Plans
+docs/plans/
+
 # Reverse engineering docs (sensitive)
 docs/cline-account-api.md
 docs/kiro-api.md

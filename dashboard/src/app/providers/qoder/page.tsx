@@ -32,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Qoder } from "@lobehub/icons";
 
 export default function QoderAuthPage() {
   const router = useRouter();
@@ -52,6 +53,7 @@ export default function QoderAuthPage() {
   const [manualLabel, setManualLabel] = useState("");
 
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(9);
 
   useEffect(() => {
     fetchConnections();
@@ -120,8 +122,8 @@ export default function QoderAuthPage() {
           <ArrowLeft className="size-4" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Zap className="size-5 text-amber-500" />
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-4">
+            <Qoder className="size-8" />
             Qoder
             <Badge variant="outline" className="text-xs font-normal">Alibaba Cloud</Badge>
           </h1>
@@ -165,35 +167,37 @@ export default function QoderAuthPage() {
               </p>
             )}
             {connections.length > 0 && (
-              <div className="space-y-3">
-                {connections.map((conn) => (
+              <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {connections.slice(0, visibleCount).map((conn) => (
                   <div
                     key={conn.id}
-                    className="flex items-center justify-between rounded-lg border p-3"
+                    className="rounded-lg border p-3 space-y-2"
                   >
-                    <div className="flex items-center gap-3">
-                      {conn.status === "active" ? (
-                        <CheckCircle2 className="size-4 text-green-500" />
-                      ) : (
-                        <XCircle className="size-4 text-destructive" />
-                      )}
-                      <div>
-                        <p className="text-sm font-medium">{conn.label}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {conn.uid?.slice(0, 16)}...
-                        </p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {conn.status === "active" ? (
+                          <CheckCircle2 className="size-4 shrink-0 text-green-500" />
+                        ) : (
+                          <XCircle className="size-4 shrink-0 text-destructive" />
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{conn.label}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {conn.uid?.slice(0, 16)}...
+                          </p>
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <Badge
-                        variant={
-                          conn.status === "active" ? "default" : "destructive"
-                        }
+                        variant={conn.status === "active" ? "default" : "destructive"}
+                        className="text-[10px] px-1.5 py-0"
                       >
                         {conn.status}
                       </Badge>
                       {conn.credit?.packageName && (
-                        <Badge variant="outline">
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                           {conn.credit.packageName}
                         </Badge>
                       )}
@@ -201,6 +205,18 @@ export default function QoderAuthPage() {
                   </div>
                 ))}
               </div>
+              {connections.length > visibleCount && (
+                <div className="flex justify-center mt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setVisibleCount((v) => v + 9)}
+                  >
+                    Load More ({connections.length - visibleCount} remaining)
+                  </Button>
+                </div>
+              )}
+              </>
             )}
           </CardContent>
         </Card>
