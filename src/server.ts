@@ -397,10 +397,19 @@ export function createApp() {
     let totalExpired = 0;
     let totalBanned = 0;
 
+    // Providers that don't use the credit system — always count as active
+    const creditExempt = new Set(["qoder", "codex"]);
+
     for (const conn of conns) {
-      const p = conn.provider || "codebuddy";
+      const p = conn.provider || "Service";
       if (!byProvider[p]) byProvider[p] = { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0, expired: 0, banned: 0 };
       byProvider[p].count++;
+
+      // Credit-exempt providers: always count as active (they don't use credit system)
+      if (creditExempt.has(p)) {
+        byProvider[p].active++;
+        continue;
+      }
 
       const credit = conn.credit as { totalCredits?: number; usedCredits?: number; remainingCredits?: number } | undefined;
       const rem = Number(credit?.remainingCredits ?? -1);
@@ -421,6 +430,20 @@ export function createApp() {
           byProvider[p].banned++;
           totalBanned++;
         }
+      } else if (rem === 0 && Number(credit?.totalCredits ?? 0) > 0) {
+        // Active status but credit exhausted
+        byProvider[p].exhausted++;
+        totalExhausted++;
+      } else {
+        byProvider[p].active++;
+      }
+
+      if (credit) {
+        byProvider[p].total += Number(credit.totalCredits ?? 0);
+        byProvider[p].used += Number(credit.usedCredits ?? 0);
+        byProvider[p].remaining += Number(credit.remainingCredits ?? 0);
+      }
+    }
       } else if (rem === 0 && Number(credit?.totalCredits ?? 0) > 0) {
         // Active status but credit exhausted
         byProvider[p].exhausted++;
@@ -912,10 +935,14 @@ export function createApp() {
   });
 
   // --- Remove exhausted (zero credit / disabled) connections ---
+  // Providers that don't use the credit system — never bulk-remove these
+  const CREDIT_EXEMPT_PROVIDERS = new Set(["qoder", "codex"]);
+
   app.post("/api/connections/remove-exhausted", async (c) => {
     const conns = listConnections();
     let removed = 0;
     for (const conn of conns) {
+      if (CREDIT_EXEMPT_PROVIDERS.has(conn.provider)) continue;
       if (conn.status === "expired") continue; // not exhausted, just invalid token
       const credit = conn.credit as { totalCredits?: number; remainingCredits?: number } | undefined;
       const rem = Number(credit?.remainingCredits ?? -1);
@@ -935,6 +962,7 @@ export function createApp() {
     const conns = listConnections();
     let removed = 0;
     for (const conn of conns) {
+      if (CREDIT_EXEMPT_PROVIDERS.has(conn.provider)) continue;
       if (conn.status === "expired") {
         await removeConnection(conn.id);
         removed++;
@@ -948,6 +976,7 @@ export function createApp() {
     const conns = listConnections();
     let removed = 0;
     for (const conn of conns) {
+      if (CREDIT_EXEMPT_PROVIDERS.has(conn.provider)) continue;
       if (conn.status === "disabled") {
         const credit = conn.credit as { remainingCredits?: number } | undefined;
         const hasCredit = (credit?.remainingCredits ?? -1) !== 0;
