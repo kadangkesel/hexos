@@ -163,22 +163,39 @@ function Main {
         # Setup Windows startup task
         Write-Info "Setting up startup task..."
         $hexosExe = Join-Path $BinDir "hexos.exe"
+        $taskCreated = $false
         try {
             # Remove old task if exists
             Unregister-ScheduledTask -TaskName "Hexos" -Confirm:$false -ErrorAction SilentlyContinue
 
             $action = New-ScheduledTaskAction -Execute $hexosExe -Argument "start"
-            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+            # Use DOMAIN\Username format — bare username fails on many Windows configs
+            $currentUser = "$env:USERDOMAIN\$env:USERNAME"
+            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
             Register-ScheduledTask -TaskName "Hexos" -Action $action -Trigger $trigger -Settings $settings -Description "Hexos AI API Proxy" -RunLevel Limited | Out-Null
 
             # Start it now
             Start-ScheduledTask -TaskName "Hexos" -ErrorAction SilentlyContinue
+            $taskCreated = $true
             Write-Ok "Startup task created (runs at login, auto-restarts on failure)"
         }
         catch {
             Write-Warn "Could not create startup task: $_"
-            Write-Warn "You can start manually: hexos start"
+            Write-Warn "Starting hexos in background instead..."
+        }
+
+        # If scheduled task failed or wasn't created, start as background process
+        if (-not $taskCreated) {
+            try {
+                Start-Process -FilePath $hexosExe -ArgumentList "start" -WindowStyle Hidden
+                Write-Ok "Hexos started as background process"
+                Write-Warn "Note: hexos won't auto-start at login. Run manually: hexos start"
+            }
+            catch {
+                Write-Warn "Could not start hexos: $_"
+                Write-Warn "Start manually: hexos start"
+            }
         }
 
         # Calculate elapsed time

@@ -12,10 +12,6 @@ import {
   Cpu,
   CheckCircle,
   Users,
-  Clock,
-  UserCheck,
-  UserX,
-  Coins,
   BarChart3,
   Layers,
   Contact,
@@ -110,7 +106,7 @@ const STAT_DEFS: StatDef[] = [
   },
   {
     title: "Total Accounts",
-    desc: "", // filled dynamically
+    desc: "All providers",
     getValue: (_u, a) => String(a.total ?? 0),
     icon: <Users className="h-4 w-4" />,
     iconBg: "bg-cyan-500/10 text-cyan-500",
@@ -243,7 +239,6 @@ export default function DashboardPage() {
   const { fetch: fetchConnections } = useConnectionsStore();
 
   const [activeRange, setActiveRange] = useState<ChartRange>("day");
-  const [creditSummary, setCreditSummary] = useState<Record<string, any> | null>(null);
 
   /* ---- derived data from the rich API response ---- */
   const usage = ((stats as Record<string, unknown>)?.usage ?? {}) as Record<string, number>;
@@ -271,40 +266,12 @@ export default function DashboardPage() {
       ? Object.entries(byAccountRaw).map(([key, val]) => ({ accountId: key, ...val }))
       : [];
 
-  /* ---- credit stats from server-side summary (all connections, not paginated) ---- */
-  const bp = creditSummary?.byProvider ?? {};
-  const cb = bp.codebuddy ?? { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0 };
-  const cl = bp.cline ?? { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0 };
-  const kr = bp.kiro ?? { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0 };
-
-  const cbTotal = cb.total;
-  const cbUsed = cb.used;
-  const cbRemaining = cb.remaining;
-  const cbPercent = cbTotal > 0 ? (cbUsed / cbTotal) * 100 : 0;
-
-  const clTotal = cl.total;
-  const clUsed = cl.used;
-  const clRemaining = cl.remaining;
-  const clPercent = clTotal > 0 ? (clUsed / clTotal) * 100 : 0;
-
-  const totalActive = creditSummary?.activeConnections ?? 0;
-  const totalExhausted = cb.exhausted + cl.exhausted + kr.exhausted;
-
   /* ---- fetch on mount + auto-refresh every 30s ---- */
-  const fetchCreditSummary = useCallback(async () => {
-    try {
-      const { apiFetch } = await import("@/lib/api");
-      const data = await apiFetch<Record<string, any>>("/api/connections/credit-summary");
-      setCreditSummary(data);
-    } catch {}
-  }, []);
-
   const refresh = useCallback(() => {
     fetchDash();
     fetchChart(activeRange);
     fetchConnections();
-    fetchCreditSummary();
-  }, [fetchDash, fetchChart, fetchConnections, fetchCreditSummary, activeRange]);
+  }, [fetchDash, fetchChart, fetchConnections, activeRange]);
 
   useEffect(() => {
     refresh();
@@ -406,13 +373,7 @@ export default function DashboardPage() {
                 <div className="text-xl font-bold">
                   {stat.getValue(usage, accounts, statsRecord)}
                 </div>
-                {stat.title === "Total Accounts" ? (
-                  <p className="text-[10px] text-muted-foreground/70 mt-1">
-                    <span className="text-emerald-500">{totalActive} active</span>
-                    {" · "}
-                    <span className="text-destructive">{totalExhausted} exhausted</span>
-                  </p>
-                ) : stat.desc ? (
+              {stat.desc ? (
                   <p className="text-[10px] text-muted-foreground/70 mt-1">{stat.desc}</p>
                 ) : null}
               </CardContent>
@@ -420,48 +381,6 @@ export default function DashboardPage() {
           </motion.div>
         ))}
       </div>
-
-      {/* ---- Accounts & Credits ---- */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.55 }}
-        className="mb-6"
-      >
-        {/* Credits by provider — always show all 3 */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[
-            { key: "cb", label: "CodeBuddy", data: cb, total: cbTotal, used: cbUsed, remaining: cbRemaining, percent: cbPercent, iconBg: "bg-amber-500/10 text-amber-500", barColor: "bg-primary" },
-            { key: "cl", label: "Cline", data: cl, total: clTotal, used: clUsed, remaining: clRemaining, percent: clPercent, iconBg: "bg-violet-500/10 text-violet-500", barColor: "bg-violet-500" },
-            { key: "kr", label: "Kiro", data: kr, total: kr.total, used: kr.used, remaining: kr.remaining, percent: kr.total > 0 ? (kr.used / kr.total) * 100 : 0, iconBg: "bg-sky-500/10 text-sky-500", barColor: "bg-sky-500" },
-          ].map((p) => (
-            <Card key={p.key}>
-              <CardContent className="pt-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-md", p.iconBg)}>
-                    <Coins className="h-3.5 w-3.5" />
-                  </div>
-                  <p className="text-xs font-medium text-muted-foreground">{p.label} Credits</p>
-                  <span className="ml-auto text-[10px] text-muted-foreground">{p.data.count} accs</span>
-                </div>
-                <p className="text-lg font-bold">
-                  {p.remaining >= 1000 ? `${(p.remaining / 1000).toFixed(1)}K` : p.remaining.toFixed(1)}{" "}
-                  <span className="text-muted-foreground font-normal text-sm">/ {p.total >= 1000 ? `${(p.total / 1000).toFixed(1)}K` : p.total.toFixed(1)}</span>
-                </p>
-                <div className="w-full h-1.5 bg-muted rounded-full mt-1.5 overflow-hidden">
-                  <div className={cn("h-full rounded-full transition-all duration-500", p.percent > 80 ? "bg-destructive" : p.barColor)} style={{ width: `${Math.min(p.percent, 100)}%` }} />
-                </div>
-                <div className="flex items-center justify-between mt-0.5">
-                  <span className="text-[10px] text-muted-foreground">{p.remaining >= 1000 ? `${(p.remaining / 1000).toFixed(1)}K` : p.remaining.toFixed(1)} remaining</span>
-                  {p.data.exhausted > 0 && (
-                    <span className="text-[10px] text-destructive">{p.data.exhausted} exhausted</span>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </motion.div>
 
       {/* ---- Token Usage Chart ---- */}
       <motion.div
