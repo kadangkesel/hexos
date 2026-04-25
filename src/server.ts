@@ -444,20 +444,6 @@ export function createApp() {
         byProvider[p].remaining += Number(credit.remainingCredits ?? 0);
       }
     }
-      } else if (rem === 0 && Number(credit?.totalCredits ?? 0) > 0) {
-        // Active status but credit exhausted
-        byProvider[p].exhausted++;
-        totalExhausted++;
-      } else {
-        byProvider[p].active++;
-      }
-
-      if (credit) {
-        byProvider[p].total += Number(credit.totalCredits ?? 0);
-        byProvider[p].used += Number(credit.usedCredits ?? 0);
-        byProvider[p].remaining += Number(credit.remainingCredits ?? 0);
-      }
-    }
 
     // Sum active from byProvider (already correctly classified above)
     const totalActive = Object.values(byProvider).reduce((sum, p) => sum + p.active, 0);
