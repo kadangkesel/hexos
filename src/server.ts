@@ -14,9 +14,21 @@ import { detectTools, bindTool, unbindTool, readToolConfig } from "./integration
 import { getProxies, addProxy, batchAddProxies, removeProxy, removeDeadProxies, removeAllProxies, checkProxy, checkAllProxies } from "./proxy/pool.ts";
 import { getSources, getScrapeStatus, startScrape, cancelScrape, integrateResults } from "./proxy/scraper.ts";
 import { getFilterConfig, setFilterEnabled, setProviderOverride, setRuleEnabled, addCustomRule, updateCustomRule, removeCustomRule } from "./config/filters.ts";
-import { join, extname } from "path";
+import { join, extname, dirname } from "path";
 import { homedir } from "os";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PKG_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 // Track batch connect tasks
 interface BatchTaskLog {
@@ -1753,7 +1765,7 @@ export function createApp() {
   // --- System info ---
   app.get("/api/system", (c) => {
     return c.json({
-      version: "0.1.4",
+      version: PKG_VERSION,
       runtime: "bun",
       automationReady: isAutomationReady(),
       providers: Object.values(PROVIDERS).map((p) => ({
