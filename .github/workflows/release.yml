@@ -101,6 +101,7 @@ jobs:
             HIDE_CONSOLE="--windows-hide-console"
           fi
           bun build src/index.ts --compile --target ${{ matrix.bun-target }} --define __HEXOS_VERSION__=\"${{ steps.version.outputs.version }}\" $HIDE_CONSOLE --outfile dist/${{ matrix.target }}/${{ matrix.binary-name }}
+        shell: bash
 
       # Copy dashboard files
       - name: Copy dashboard files
