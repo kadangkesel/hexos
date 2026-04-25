@@ -856,6 +856,40 @@ export function createApp() {
             valid: true,
             credit: kiroStatus.usage ?? undefined,
           };
+        } else if (conn.provider === "codex") {
+          // Codex: validate JWT expiry, refresh if needed (no credit system)
+          const { isCodexTokenExpired, parseCodexToken, refreshCodex } = await import("./auth/oauth.ts");
+          const expired = isCodexTokenExpired(conn.accessToken, 60);
+          
+          if (expired && conn.refreshToken) {
+            try {
+              const refreshed = await refreshCodex(conn.refreshToken, conn.id);
+              await updateConnection(conn.id, {
+                accessToken: refreshed.accessToken,
+                refreshToken: refreshed.refreshToken,
+              });
+              log.info(`[Check credits] ${conn.label} (Codex) token refreshed`);
+            } catch (e: any) {
+              log.warn(`[Check credits] ${conn.label} (Codex) refresh failed: ${e.message}`);
+              if (conn.status !== "expired") {
+                await setConnectionStatus(conn.id, "expired");
+                expiredCount++;
+              }
+              results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "refresh_failed" });
+              return;
+            }
+          } else if (expired) {
+            log.warn(`[Check credits] ${conn.label} (Codex) token expired, no refresh token`);
+            if (conn.status !== "expired") {
+              await setConnectionStatus(conn.id, "expired");
+              expiredCount++;
+            }
+            results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_expired" });
+            return;
+          }
+          
+          const parsed = parseCodexToken(conn.accessToken);
+          status = { valid: true, email: parsed.email };
         } else {
           // CodeBuddy
           status = await checkToken(conn.accessToken);
