@@ -1,6 +1,6 @@
 import fs from "fs";
 import crypto from "crypto";
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import { execWithPassword, isSudoAvailable } from "../dns/dnsConfig.ts";
 
 const IS_WIN = process.platform === "win32";
@@ -82,12 +82,18 @@ async function installCertMac(sudoPassword: string | null, certPath: string): Pr
 }
 
 async function installCertWindows(certPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    exec(`certutil -addstore Root "${certPath}"`, { windowsHide: true }, (error) => {
-      if (error) reject(new Error(`Failed to install certificate: ${error.message}`));
-      else { console.log("🔐 Cert: ✅ installed to Windows Root store"); resolve(); }
-    });
-  });
+  // certutil -addstore Root requires admin — use PowerShell elevation (UAC prompt)
+  const escapedPath = certPath.replace(/\\/g, "\\\\").replace(/'/g, "''");
+  const psCmd = `certutil -addstore Root '${escapedPath}'`;
+  try {
+    execSync(
+      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-Command','${psCmd.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden"`,
+      { windowsHide: true, timeout: 30000 },
+    );
+    console.log("🔐 Cert: ✅ installed to Windows Root store");
+  } catch (error: any) {
+    throw new Error("Failed to install certificate — admin elevation may have been cancelled");
+  }
 }
 
 async function installCertLinux(sudoPassword: string | null, certPath: string): Promise<void> {
@@ -128,12 +134,16 @@ async function uninstallCertMac(sudoPassword: string | null, certPath: string): 
 }
 
 async function uninstallCertWindows(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    exec(`certutil -delstore Root "${CA_COMMON_NAME}"`, { windowsHide: true }, (error) => {
-      if (error) reject(new Error(`Failed to uninstall certificate: ${error.message}`));
-      else { console.log("🔐 Cert: ✅ uninstalled from Windows Root store"); resolve(); }
-    });
-  });
+  const psCmd = `certutil -delstore Root '${CA_COMMON_NAME}'`;
+  try {
+    execSync(
+      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-Command','${psCmd.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden"`,
+      { windowsHide: true, timeout: 30000 },
+    );
+    console.log("🔐 Cert: ✅ uninstalled from Windows Root store");
+  } catch (error: any) {
+    throw new Error("Failed to uninstall certificate — admin elevation may have been cancelled");
+  }
 }
 
 async function uninstallCertLinux(sudoPassword: string | null): Promise<void> {
