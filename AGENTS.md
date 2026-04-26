@@ -24,7 +24,7 @@ No test framework is configured. No linter/formatter for the server `src/`.
 
 ## Architecture
 
-**Entrypoint**: `src/index.ts` — Commander CLI. Parses subcommands (`start`, `auth`, `key`, `usage`, `service`, `update`, `uninstall`).
+**Entrypoint**: `src/index.ts` — Commander CLI. Parses subcommands (`start`, `auth`, `key`, `usage`, `service`, `update`, `uninstall`, `mitm`).
 
 **Server**: `src/server.ts` — `createApp()` returns a Hono app. Single file, ~1450 lines. Handles:
 - `/v1/*` — OpenAI-compatible proxy endpoints (auth middleware, chat completions, messages, models)
@@ -38,9 +38,10 @@ No test framework is configured. No linter/formatter for the server `src/`.
 | `proxy/` | `handler.ts` (request routing + failover), `AI Provider.ts` (format translation), `kiro-stream.ts`/`kiro-transform.ts` (Kiro protocol), `qoder-auth.ts`/`qoder-stream.ts` (Qoder protocol), `pool.ts` (HTTP proxy pool), `scraper.ts` (proxy scraper) |
 | `auth/` | `oauth.ts` (OAuth flows, browser automation, batch connect, token checks), `store.ts` (lowdb persistence for connections + API keys) |
 | `tracking/` | `tracker.ts` (usage recording, stats aggregation) |
-| `integration/` | `tools.ts` (auto-bind to Claude Code, OpenCode, Cline, Hermes configs) |
+| `integration/` | `tools.ts` (auto-bind to AI Assistant, OpenCode, Cline, Hermes configs) |
 | `utils/` | `logger.ts`, `transform.ts` (message augmentation), `crypto.ts` |
 | `automation/` | Python scripts for Camoufox browser automation (`login.py`, `cline_login.py`, `kiro_login.py`, `qoder_login.py`, `setup.py`) |
+| `mitm/` | MITM proxy: `server.ts` (child process HTTPS on :443), `manager.ts` (lifecycle), `config.ts` (hosts/patterns), `cert/` (Root CA + leaf certs), `dns/` (hosts file), `handlers/` (per-tool intercept) |
 
 ## Providers
 
@@ -101,3 +102,6 @@ Separate Next.js 16 app (React 19, Tailwind v4, shadcn/ui base-nova style, zusta
 - **`bun dev` requires `start` subcommand** — the dev script runs `bun run --watch src/index.ts start`, not just the file.
 - **Dashboard static export is conditional** — `next.config.ts` only enables `output: "export"` when `NEXT_STATIC_EXPORT=true` env var is set.
 - **CORS** is configured for `localhost:7471` only (dashboard dev server).
+- **MITM server runs as root** — `src/mitm/server.ts` is a standalone child process spawned via `sudo`. It must NOT import from `src/auth/store.ts` (top-level await). It reads `db.json` directly via `fs`.
+- **MITM certs stored in `~/.hexos/mitm/`** — `rootCA.key`, `rootCA.crt`, and `.mitm.pid`.
+- **`node-forge` dependency** — used for X.509 certificate generation (Root CA + per-domain leaf certs).

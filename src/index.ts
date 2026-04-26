@@ -659,4 +659,125 @@ program
     log.info("To fully remove all data: rm -rf ~/.hexos");
   });
 
+// ── MITM commands ────────────────────────────────────────────
+const mitm = program.command("mitm").description("Manage MITM proxy for IDE interception");
+
+mitm
+  .command("start")
+  .description("Start the MITM proxy server (requires sudo)")
+  .option("--password <password>", "Sudo password (will prompt if not provided)")
+  .action(async (opts) => {
+    const { startServer } = await import("./mitm/manager.ts");
+    const keys = getApiKeys();
+    const apiKey = keys[0] || "";
+
+    if (!apiKey) {
+      log.warn("No API key configured. Run: hexos key create");
+      log.warn("MITM will forward requests without authentication.");
+    }
+
+    let password = opts.password || null;
+    if (!password && process.platform !== "win32") {
+      process.stdout.write("Sudo password: ");
+      try {
+        const line = readFileSync("/dev/stdin", "utf-8").split("\n")[0];
+        password = line.trim();
+      } catch {
+        log.error("Failed to read password. Use --password flag instead.");
+        process.exit(1);
+      }
+    }
+
+    try {
+      const result = await startServer(apiKey, password);
+      log.ok(`MITM server started (PID: ${result.pid})`);
+    } catch (e: any) {
+      log.error(e.message);
+      process.exit(1);
+    }
+  });
+
+mitm
+  .command("stop")
+  .description("Stop the MITM proxy server")
+  .option("--password <password>", "Sudo password")
+  .action(async (opts) => {
+    const { stopServer } = await import("./mitm/manager.ts");
+    try {
+      await stopServer(opts.password || null);
+      log.ok("MITM server stopped");
+    } catch (e: any) {
+      log.error(e.message);
+      process.exit(1);
+    }
+  });
+
+mitm
+  .command("status")
+  .description("Show MITM proxy status")
+  .action(async () => {
+    const { getMitmStatus } = await import("./mitm/manager.ts");
+    const status = await getMitmStatus();
+
+    console.log(chalk.bold("\n  MITM Proxy Status:\n"));
+    console.log(`    Server:  ${status.running ? chalk.green(`running (PID: ${status.pid})`) : chalk.red("stopped")}`);
+    console.log(`    Cert:    ${status.certExists ? (status.certTrusted ? chalk.green("trusted ✅") : chalk.yellow("exists but not trusted")) : chalk.red("not generated")}`);
+    console.log(chalk.bold("\n    DNS Interception:"));
+    for (const [tool, active] of Object.entries(status.dnsStatus)) {
+      console.log(`      ${tool.padEnd(15)} ${active ? chalk.green("✅ active") : chalk.dim("inactive")}`);
+    }
+    console.log("");
+  });
+
+mitm
+  .command("enable <tool>")
+  .description("Enable DNS interception for a tool (antigravity|copilot|kiro|cursor)")
+  .option("--password <password>", "Sudo password")
+  .action(async (tool, opts) => {
+    const { enableToolDNS } = await import("./mitm/manager.ts");
+    try {
+      await enableToolDNS(tool, opts.password || null);
+      log.ok(`DNS interception enabled for ${tool}`);
+    } catch (e: any) {
+      log.error(e.message);
+      process.exit(1);
+    }
+  });
+
+mitm
+  .command("disable <tool>")
+  .description("Disable DNS interception for a tool")
+  .option("--password <password>", "Sudo password")
+  .action(async (tool, opts) => {
+    const { disableToolDNS } = await import("./mitm/manager.ts");
+    try {
+      await disableToolDNS(tool, opts.password || null);
+      log.ok(`DNS interception disabled for ${tool}`);
+    } catch (e: any) {
+      log.error(e.message);
+      process.exit(1);
+    }
+  });
+
+mitm
+  .command("alias")
+  .description("Manage model aliases for MITM interception")
+  .action(async () => {
+    const { getMitmAliases } = await import("./auth/store.ts");
+    const aliases = getMitmAliases();
+    if (Object.keys(aliases).length === 0) {
+      log.warn("No MITM model aliases configured.");
+      log.info("Set aliases via dashboard or API: POST /api/mitm/alias");
+      return;
+    }
+    console.log(chalk.bold("\n  MITM Model Aliases:\n"));
+    for (const [tool, mappings] of Object.entries(aliases)) {
+      console.log(`    ${chalk.cyan(tool)}:`);
+      for (const [from, to] of Object.entries(mappings)) {
+        console.log(`      ${from} → ${chalk.green(to)}`);
+      }
+    }
+    console.log("");
+  });
+
 program.parse();
