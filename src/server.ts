@@ -582,11 +582,13 @@ export function createApp() {
       }
       
       // Update credit info
+      // Qoder free tier: isQuotaExceeded=true but API still works (soft limit).
+      // Always set remainingCredits=1 so dashboard doesn't show "exhausted".
       const credit = {
-        totalCredits: 0,
-        remainingCredits: qoderStatus.isQuotaExceeded ? 0 : 1,
+        totalCredits: 1,
+        remainingCredits: 1,
         usedCredits: 0,
-        packageName: qoderStatus.plan || "Free",
+        packageName: qoderStatus.plan || (qoderStatus.isQuotaExceeded ? "Free (soft limit)" : "Free"),
         expiresAt: "",
         fetchedAt: Date.now(),
       };
@@ -855,10 +857,10 @@ export function createApp() {
           status = {
             valid: true,
             credit: {
-              totalCredits: 0,
-              remainingCredits: qoderStatus.isQuotaExceeded ? 0 : 1,
+              totalCredits: 1,
+              remainingCredits: 1,
               usedCredits: 0,
-              packageName: qoderStatus.plan || "Free",
+              packageName: qoderStatus.plan || (qoderStatus.isQuotaExceeded ? "Free (soft limit)" : "Free"),
               expiresAt: "",
             },
           };

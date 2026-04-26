@@ -63,13 +63,12 @@ async function refreshCreditAfterUse(conn: Connection): Promise<void> {
       if (userInfo) {
         const status = await checkQoderStatus(userInfo);
         if (status.valid) {
-          const quota = status.isQuotaExceeded;
           await updateConnection(conn.id, {
             credit: {
-              totalCredits: quota ? 0 : 1,
-              remainingCredits: quota ? 0 : 1,
+              totalCredits: 1,
+              remainingCredits: 1,
               usedCredits: 0,
-              packageName: status.plan || "Free",
+              packageName: status.plan || (status.isQuotaExceeded ? "Free (soft limit)" : "Free"),
               expiresAt: status.nextResetAt ? new Date(status.nextResetAt).toISOString() : "",
               fetchedAt: Date.now(),
             },
