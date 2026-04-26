@@ -100,6 +100,10 @@ const HEXOS_TO_LITELLM: Record<string, string[]> = {
   "kmodel": ["moonshot/kimi-k2.6"],                // qd/kimi-k2.6
   "mmodel": ["minimax/MiniMax-M2.7", "minimax/MiniMax-M2.5"], // qd/minimax-m2.7
   "qmodel": ["dashscope/qwen3-next-80b-a3b-instruct"],        // qd/qwen3.6-plus
+  "dmodel": ["deepseek/deepseek-v3.2", "deepseek/deepseek-chat"],  // qd/deepseek-v4-pro (V4 not in LiteLLM yet, use V3.2)
+  "dfmodel": ["deepseek/deepseek-v3.2", "deepseek/deepseek-chat"], // qd/deepseek-v4-flash (V4 not in LiteLLM yet, use V3.2)
+  "deepseek-v4-pro": ["deepseek/deepseek-v3.2", "deepseek/deepseek-chat"],
+  "deepseek-v4-flash": ["deepseek/deepseek-v3.2", "deepseek/deepseek-chat"],
 };
 
 // ── Singleton state ────────────────────────────────────────────────────
