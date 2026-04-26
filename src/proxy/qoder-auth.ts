@@ -29,10 +29,10 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`;
 
 /** Default product version (CLI) */
-const COSY_VERSION = "0.1.47";
+const COSY_VERSION = "0.1.48";
 
 /** Default IDE version */
-const IDE_VERSION = "0.14.1";
+const IDE_VERSION = "0.1.48";
 
 // ---------------------------------------------------------------------------
 // Crypto helpers
@@ -252,7 +252,7 @@ export function buildQoderRequest(
 } {
   // Generate random machine identity per-request (like CLI does)
   const mId = machineId || crypto.randomUUID();
-  const mToken = machineToken || crypto.randomUUID().replace(/-/g, "").substring(0, 28);
+  const mToken = machineToken || userInfo.security_oauth_token.substring(0, 28);
   const mType = crypto.createHash("md5").update(mId).digest("hex").substring(0, 18);
 
   // Generate Bearer COSY token (signature includes plaintext body)
@@ -282,6 +282,7 @@ export function buildQoderRequest(
 
     // Request metadata
     "X-Request-Id": crypto.randomUUID(),
+    "Login-Version": "v2",
   };
 
   // Send plaintext body (no encryption) — Encode=1 is NOT used
@@ -351,16 +352,14 @@ export async function checkQoderStatus(
     const mToken = machineToken || crypto.randomUUID().replace(/-/g, "").substring(0, 28);
     const mType = crypto.createHash("md5").update(mId).digest("hex").substring(0, 18);
     const requestId = crypto.randomUUID();
-    const path = "/api/v3/user/status";
-    const fullPath = `/algo${path}`;
+    const quotaPath = "/api/v2/quota/usage";
+    const fullPath = `/algo${quotaPath}`;
 
-    const auth = generateBearerToken(userInfo, fullPath, "{}");
+    const auth = generateBearerToken(userInfo, fullPath);
 
-    // No ?Encode=1 — send plaintext body (matches proxy request pattern)
-    const res = await fetch(`https://center.qoder.sh${fullPath}`, {
-      method: "POST",
+    const res = await fetch(`https://api2.qoder.sh${fullPath}`, {
+      method: "GET",
       headers: {
-        "Content-Type": "application/json",
         "Accept": "application/json",
         "Accept-Encoding": "identity",
         "User-Agent": "Go-http-client/2.0",
@@ -374,27 +373,25 @@ export async function checkQoderStatus(
         "Cosy-MachineType": mType,
         "Cosy-ClientType": "5",
         "Cosy-Data-Policy": "AGREE",
+        "Login-Version": "v2",
         "X-Request-Id": requestId,
       },
-      body: "{}",
     });
 
     if (!res.ok) {
-      // Status endpoint may be unreliable — log but don't treat as invalid
-      // The actual inference endpoint may still work fine
       let body = "";
       try { body = await res.text(); } catch {}
-      console.warn(`[Qoder checkStatus] HTTP ${res.status} from status endpoint: ${body.slice(0, 200)}`);
+      console.warn(`[Qoder checkStatus] HTTP ${res.status} from quota endpoint: ${body.slice(0, 200)}`);
       return { valid: false };
     }
 
     const data = await res.json() as any;
     return {
       valid: true,
-      plan: data.plan || data.userTag || "Free",
-      isQuotaExceeded: data.isQuotaExceeded ?? false,
-      email: data.email || userInfo.email,
-      nextResetAt: data.nextResetAt,
+      plan: data.userType || "Free",
+      isQuotaExceeded: data.isQuotaExceeded ?? (data.userQuota?.remaining === 0),
+      email: userInfo.email,
+      nextResetAt: data.expiresAt,
     };
   } catch (err) {
     console.warn(`[Qoder checkStatus] Exception: ${err instanceof Error ? err.message : err}`);

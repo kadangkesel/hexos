@@ -50,8 +50,10 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "qd/glm-5.1":           { provider: "qoder", model: "gm51model",         info: { id: "qd/glm-5.1",           name: "GLM 5.1 (Zhipu)", contextWindow: 180000 } },
   "qd/kimi-k2.6":         { provider: "qoder", model: "kmodel",            info: { id: "qd/kimi-k2.6",         name: "Kimi K2.6 (Moonshot)", contextWindow: 180000 } },
   "qd/minimax-m2.7":      { provider: "qoder", model: "mmodel",            info: { id: "qd/minimax-m2.7",      name: "MiniMax M2.7", contextWindow: 180000 } },
+  "qd/deepseek-v4-pro":   { provider: "qoder", model: "dmodel",            info: { id: "qd/deepseek-v4-pro",   name: "DeepSeek V4 Pro", contextWindow: 180000 } },
+  "qd/deepseek-v4-flash": { provider: "qoder", model: "dfmodel",           info: { id: "qd/deepseek-v4-flash", name: "DeepSeek V4 Flash", contextWindow: 180000 } },
   // Note: "hidden" model keys (opus-4, gpt-5, etc) are accepted by server but ALL
-  // fallback to Qwen (Alibaba's default). Only the 9 public models above are distinct.
+  // fallback to Qwen (Alibaba's default). Only the 11 public models above are distinct.
 
   // Kiro models (prefix: kr/) — AWS CodeWhisperer backend
   "kr/claude-sonnet-4.5":    { provider: "kiro", model: "claude-sonnet-4.5",    info: { id: "kr/claude-sonnet-4.5",    name: "Claude Sonnet 4.5 (Kiro)", contextWindow: 200000 } },
