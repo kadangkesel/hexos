@@ -135,10 +135,11 @@ export async function addDNSEntry(tool: string, sudoPassword: string | null): Pr
   const entries = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\n");
   try {
     if (IS_WIN) {
-      // Windows: use elevated PowerShell to append to hosts file
-      const lines = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("`r`n");
+      // Windows: use elevated PowerShell to append each entry to hosts file
       const hostsEsc = HOSTS_FILE.replace(/'/g, "''");
-      runElevatedWindows(`Add-Content -Path '${hostsEsc}' -Value '${lines}' -Encoding UTF8; ipconfig /flushdns | Out-Null`);
+      const cmds = entriesToAdd.map((h) => `Add-Content -Path '${hostsEsc}' -Value '127.0.0.1 ${h}' -Encoding UTF8`);
+      cmds.push("ipconfig /flushdns | Out-Null");
+      runElevatedWindows(cmds.join("; "));
     } else {
       await execWithPassword(`echo "${entries}" >> ${HOSTS_FILE}`, sudoPassword);
       await flushDNS(sudoPassword);

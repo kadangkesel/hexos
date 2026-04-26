@@ -78,7 +78,7 @@ const TOOLS: ToolMeta[] = [
     name: "Antigravity",
     icon: Cloud,
     hosts: ["cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"],
-    exampleModels: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
+    exampleModels: ["gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3-flash", "sonnet-4-6", "opus-4-6-thinking"],
   },
   {
     id: "kiro",
