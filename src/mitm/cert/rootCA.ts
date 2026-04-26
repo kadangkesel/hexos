@@ -103,9 +103,20 @@ export function generateLeafCert(
   cert.setIssuer(rootCA.cert.subject.attributes);
 
   cert.setExtensions([
-    { name: "basicConstraints", cA: false },
-    { name: "keyUsage", digitalSignature: true, keyEncipherment: true },
-    { name: "extKeyUsage", serverAuth: true, clientAuth: true },
+    { name: "basicConstraints", cA: false, critical: true },
+    {
+      name: "keyUsage",
+      critical: true,
+      digitalSignature: true,
+      keyEncipherment: true,
+      keyAgreement: true,
+    },
+    {
+      name: "extKeyUsage",
+      serverAuth: true,
+    },
+    { name: "subjectKeyIdentifier" },
+    { name: "authorityKeyIdentifier", keyIdentifier: true },
     {
       name: "subjectAltName",
       altNames: [
