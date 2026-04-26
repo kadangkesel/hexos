@@ -56,25 +56,25 @@ async function refreshCreditAfterUse(conn: Connection): Promise<void> {
       // Local credit tracking — just ensure credit is initialized
       await initializeCredit(conn.id, conn.provider);
     } else if (conn.provider === "qoder") {
+      // Qoder free tier has isQuotaExceeded=true with 0 credits but API still works (soft limit).
+      // NEVER disable based on quota check — only disable from upstream 429 with exhaustion keywords.
       const { checkQoderStatus } = await import("./qoder-auth.ts");
       const userInfo = _getQoderUserInfo(conn);
       if (userInfo) {
         const status = await checkQoderStatus(userInfo);
         if (status.valid) {
+          const quota = status.isQuotaExceeded;
           await updateConnection(conn.id, {
             credit: {
-              totalCredits: 0,
-              remainingCredits: status.isQuotaExceeded ? 0 : 1,
+              totalCredits: quota ? 0 : 1,
+              remainingCredits: quota ? 0 : 1,
               usedCredits: 0,
               packageName: status.plan || "Free",
               expiresAt: status.nextResetAt ? new Date(status.nextResetAt).toISOString() : "",
               fetchedAt: Date.now(),
             },
           } as any);
-          if (status.isQuotaExceeded) {
-            log.warn(`[${conn.label}] Qoder quota exceeded — marking disabled`);
-            await setConnectionStatus(conn.id, "disabled");
-          }
+          // Do NOT disable — Qoder free tier works even with isQuotaExceeded=true
         }
       }
     } else if (conn.provider === "codex") {
