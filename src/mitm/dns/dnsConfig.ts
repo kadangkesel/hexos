@@ -23,24 +23,31 @@ function isRunningAsAdmin(): boolean {
 }
 
 /**
- * Run a command with admin elevation on Windows.
- * If already admin, runs directly. Otherwise uses UAC elevation.
+ * Run a PowerShell command with admin elevation on Windows.
+ * If already admin, runs directly via temp .ps1 file.
+ * Otherwise uses UAC elevation.
  */
 function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
-  // If already running as admin, just execute directly
-  if (isRunningAsAdmin()) {
-    try {
-      execSync(`powershell -NoProfile -Command "${command}"`, { windowsHide: true, timeout: timeoutMs });
-      return;
-    } catch (e: any) {
-      throw new Error(e.message || "Command failed");
-    }
-  }
-
-  // Not admin — use UAC elevation via temp script
   const ts = Date.now();
   const tmpDir = os.tmpdir();
   const scriptPath = path.join(tmpDir, `hexos_dns_${ts}.ps1`);
+
+  // Always write to .ps1 file to avoid CMD pipe/quote interpretation issues
+  fs.writeFileSync(scriptPath, command, "utf8");
+
+  if (isRunningAsAdmin()) {
+    // Already admin — run .ps1 directly, no UAC needed
+    try {
+      execSync(`powershell -NoProfile -ExecutionPolicy handle -File "${scriptPath}"`, {
+        windowsHide: true, timeout: timeoutMs,
+      });
+    } finally {
+      try { fs.unlinkSync(scriptPath); } catch {}
+    }
+    return;
+  }
+
+  // Not admin — use UAC elevation via Start-Process
   const flagPath = path.join(tmpDir, `hexos_dns_${ts}.flag`);
   const errPath = path.join(tmpDir, `hexos_dns_${ts}.err`);
 

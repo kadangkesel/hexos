@@ -88,28 +88,29 @@ async function installCertMac(sudoPassword: string | null, certPath: string): Pr
 function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
   const os = require("os");
   const path = require("path");
-
-  // If already running as admin, just execute directly
-  try {
-    execSync("net session >nul 2>&1", { windowsHide: true });
-    // We're admin — run directly
-    execSync(`powershell -NoProfile -Command "${command}"`, { windowsHide: true, timeout: timeoutMs });
-    return;
-  } catch (e: any) {
-    // net session failed = not admin, OR powershell command failed
-    if (e.message?.includes("net session")) {
-      // Not admin — fall through to UAC elevation
-    } else if (!e.status || e.status === 1) {
-      // net session check itself failed — try direct anyway
-    } else {
-      throw new Error(e.message || "Command failed");
-    }
-  }
-
-  // Not admin — use UAC elevation via temp script
   const ts = Date.now();
   const tmpDir = os.tmpdir();
   const scriptPath = path.join(tmpDir, `hexos_mitm_${ts}.ps1`);
+
+  // Always write to .ps1 file to avoid CMD pipe/quote issues
+  fs.writeFileSync(scriptPath, command, "utf8");
+
+  // Check if already admin
+  let isAdmin = false;
+  try { execSync("net session >nul 2>&1", { windowsHide: true }); isAdmin = true; } catch {}
+
+  if (isAdmin) {
+    try {
+      execSync(`powershell -NoProfile -ExecutionPolicy handle -File "${scriptPath}"`, {
+        windowsHide: true, timeout: timeoutMs,
+      });
+    } finally {
+      try { fs.unlinkSync(scriptPath); } catch {}
+    }
+    return;
+  }
+
+  // Not admin — use UAC elevation
   const flagPath = path.join(tmpDir, `hexos_mitm_${ts}.flag`);
   const errPath = path.join(tmpDir, `hexos_mitm_${ts}.err`);
 
