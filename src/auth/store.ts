@@ -38,11 +38,9 @@ export interface Connection {
 interface DbSchema {
   apiKeys: string[];
   connections: Connection[];
-  mitmAlias?: Record<string, Record<string, string>>;
-  // e.g. { copilot: { "gpt-4o": "cb/opus-4.6" }, kiro: { "claude-3.5-sonnet": "cl/sonnet-4.6" } }
 }
 
-const defaultData: DbSchema = { apiKeys: [], connections: [], mitmAlias: {} };
+const defaultData: DbSchema = { apiKeys: [], connections: [] };
 const db = await JSONFilePreset<DbSchema>(join(DATA_DIR, "db.json"), defaultData);
 
 // Migrate old connections that don't have the new fields
@@ -328,34 +326,4 @@ export async function importData(data: { connections?: Connection[] }): Promise<
   return { imported, skipped };
 }
 
-// ── MITM Alias Management ─────────────────────────────────────
 
-/** Get all MITM model aliases */
-export function getMitmAliases(): Record<string, Record<string, string>> {
-  return db.data.mitmAlias || {};
-}
-
-/** Set a MITM model alias for a tool */
-export async function setMitmAlias(tool: string, sourceModel: string, targetModel: string): Promise<void> {
-  if (!db.data.mitmAlias) db.data.mitmAlias = {};
-  if (!db.data.mitmAlias[tool]) db.data.mitmAlias[tool] = {};
-  db.data.mitmAlias[tool][sourceModel] = targetModel;
-  await db.write();
-}
-
-/** Remove a MITM model alias */
-export async function removeMitmAlias(tool: string, sourceModel: string): Promise<void> {
-  if (!db.data.mitmAlias?.[tool]) return;
-  delete db.data.mitmAlias[tool][sourceModel];
-  if (Object.keys(db.data.mitmAlias[tool]).length === 0) {
-    delete db.data.mitmAlias[tool];
-  }
-  await db.write();
-}
-
-/** Set all MITM aliases for a tool at once */
-export async function setMitmAliasesForTool(tool: string, aliases: Record<string, string>): Promise<void> {
-  if (!db.data.mitmAlias) db.data.mitmAlias = {};
-  db.data.mitmAlias[tool] = aliases;
-  await db.write();
-}

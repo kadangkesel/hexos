@@ -18,6 +18,8 @@ import {
   ChevronDown,
   ChevronUp,
   DollarSign,
+  PieChart as PieChartIcon,
+  Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -36,12 +38,10 @@ import {
   TableBody,
   TableCell,
 } from "@/components/ui/table";
-import { Area, AreaChart, XAxis, YAxis, CartesianGrid } from "recharts";
+import { Area, AreaChart, XAxis, YAxis, CartesianGrid, Pie, PieChart, Cell, Bar, BarChart } from "recharts";
 import {
-  type ChartConfig,
   ChartContainer,
   ChartTooltip,
-  ChartTooltipContent,
   ChartLegend,
   ChartLegendContent,
 } from "@/components/ui/chart";
@@ -60,13 +60,18 @@ function formatPercent(n: number): string {
   return n.toFixed(1) + "%";
 }
 
-function formatMs(n: number): string {
-  return n.toFixed(0) + "ms";
-}
-
 function formatCost(n: number): string {
   if (n >= 1) return "$" + n.toFixed(2);
   return "$" + n.toFixed(4);
+}
+
+function formatUptime(ms: number): { days: number; hours: number; minutes: number; seconds: number } {
+  const totalSeconds = Math.floor(ms / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return { days, hours, minutes, seconds };
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,7 +146,7 @@ function UsageByAccountCard({ data, loading }: { data: Array<Record<string, unkn
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.8 }}
+      transition={{ delay: 0.85 }}
     >
       <Card className="min-w-0 overflow-hidden">
         <CardHeader>
@@ -252,7 +257,7 @@ const RANGES: { label: string; value: ChartRange }[] = [
 
 export default function DashboardPage() {
   const { stats, loading: dashLoading, fetch: fetchDash } = useDashboardStore();
-  const { chart, chartLoading, fetchChart } = useUsageStore();
+  const { chart, chartLoading, fetchChart, weekChart, fetchWeekChart } = useUsageStore();
   const { fetch: fetchConnections } = useConnectionsStore();
 
   const [activeRange, setActiveRange] = useState<ChartRange>("day");
@@ -283,12 +288,27 @@ export default function DashboardPage() {
       ? Object.entries(byAccountRaw).map(([key, val]) => ({ accountId: key, ...val }))
       : [];
 
+  /* ---- server uptime (live ticker) ---- */
+  const serverData = (stats as Record<string, unknown>)?.server as { startedAt: number; uptimeMs: number } | undefined;
+  const [liveUptimeMs, setLiveUptimeMs] = useState(0);
+
+  useEffect(() => {
+    if (!serverData?.startedAt) return;
+    const tick = () => setLiveUptimeMs(Date.now() - serverData.startedAt);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [serverData?.startedAt]);
+
+  const uptime = formatUptime(liveUptimeMs);
+
   /* ---- fetch on mount + auto-refresh every 30s ---- */
   const refresh = useCallback(() => {
     fetchDash();
     fetchChart(activeRange);
+    fetchWeekChart();
     fetchConnections();
-  }, [fetchDash, fetchChart, fetchConnections, activeRange]);
+  }, [fetchDash, fetchChart, fetchWeekChart, fetchConnections, activeRange]);
 
   useEffect(() => {
     refresh();
@@ -309,6 +329,10 @@ export default function DashboardPage() {
   const sortedByAccount = [...byAccount].sort(
     (a, b) => ((b.requests as number) ?? 0) - ((a.requests as number) ?? 0),
   );
+  const sortedByModelCost = [...byModel].sort(
+    (a, b) => ((b.cost as number) ?? 0) - ((a.cost as number) ?? 0),
+  );
+  const totalModelRequests = sortedByModel.reduce((sum, m) => sum + ((m.requests as number) ?? 0), 0);
 
   /* ---- chart: aggregate totals ---- */
   const chartTotalTokens = chart.reduce((sum, b) => sum + (Number(b.tokens) || Number(b.promptTokens || 0) + Number(b.completionTokens || 0)), 0);
@@ -366,10 +390,10 @@ export default function DashboardPage() {
 
   return (
     <>
-      <PageHeader title="Dashboard" subtitle="Overview of your Hexos gateway" />
+      <PageHeader title="Dashboard" subtitle="Overview of your Proxy gateway" />
 
       {/* ---- Stat Cards ---- */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 mb-3 ">
         {STAT_DEFS.map((stat, index) => (
           <motion.div
             key={stat.title}
@@ -377,12 +401,17 @@ export default function DashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.1 }}
           >
-            <Card className="h-full">
-              <CardHeader className="flex flex-row items-center justify-between pb-1">
-                <CardTitle className="text-xs font-medium text-muted-foreground">
+            <Card className={cn(
+              "h-full border border-l-0",
+              index === 0 && "border-l",
+              index % 2 === 0 && "max-sm:border-l",
+              index % 3 === 0 && "max-lg:sm:border-l",
+            )}>
+              <CardHeader className="flex flex-row items-center justify-between ">
+                <CardTitle className="text-xs font-bold text-muted-foreground">
                   {stat.title}
                 </CardTitle>
-                <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md", stat.iconBg)}>
+                <div className={cn("flex h-5 w-5 items-center justify-center rounded-md")}>
                   {stat.icon}
                 </div>
               </CardHeader>
@@ -391,7 +420,7 @@ export default function DashboardPage() {
                   {stat.getValue(usage, accounts, statsRecord)}
                 </div>
               {stat.desc ? (
-                  <p className="text-[10px] text-muted-foreground/70 mt-1">{stat.desc}</p>
+                  <span className="text-[10px] text-muted-foreground/70 mt-1">{stat.desc}</span>
                 ) : null}
               </CardContent>
             </Card>
@@ -399,19 +428,77 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      {/* ---- Server Uptime Card ---- */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.55 }}
+        className="mb-3"
+      >
+        <Card>
+          <CardContent className="py-2.5 px-4">
+            <div className="flex items-center justify-between gap-3">
+              {/* Left: Status */}
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md">
+                  <Activity className="h-3.5 w-3.5" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold">Server Uptime</span>
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  </span>
+                </div>
+              </div>
+
+              {/* Center: Uptime counters inline */}
+              <div className="flex items-center gap-1.5 font-mono text-xl tabular-nums">
+                <span className="font-semibold">{String(uptime.days).padStart(2, "0")}</span>
+                <span className="text-muted-foreground text-[10px]">d</span>
+                <span className="font-semibold">{String(uptime.hours).padStart(2, "0")}</span>
+                <span className="text-muted-foreground text-[10px]">h</span>
+                <span className="font-semibold">{String(uptime.minutes).padStart(2, "0")}</span>
+                <span className="text-muted-foreground text-[10px]">m</span>
+                <span className="font-semibold">{String(uptime.seconds).padStart(2, "0")}</span>
+                <span className="text-muted-foreground text-[10px]">s</span>
+              </div>
+
+              {/* Right: Strip bar + rate */}
+              <div className="hidden sm:flex items-center gap-2.5">
+                <div className="flex items-end gap-[2px]">
+                  {Array.from({ length: 25 }).map((_, i) => (
+                    <motion.div
+                      key={i}
+                      className="w-[4px] rounded-[1px] bg-emerald-500"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 14, opacity: 1 }}
+                      transition={{ delay: 0.6 + i * 0.04, duration: 0.25, ease: "easeOut" }}
+                    />
+                  ))}
+                </div>
+                <span className="text-[10px] text-muted-foreground">
+                  {formatPercent(usage.successRate ?? 100)}
+                </span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+
       {/* ---- Token Usage Chart ---- */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.6 }}
       >
-        <Card className="mb-6">
+        <Card className="mb-3">
           <div className="flex flex-col gap-4 px-4 pt-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-blue-500/10 text-blue-500">
-                  <BarChart3 className="h-4 w-4" />
-                </div>
+                {/* <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md">
+                  <BarChart3 className="h-5 w-5" />
+                </div> */}
                 <div>
                   <CardTitle>
                     {activeRange === "day" ? "Hourly" : "Daily"} Usage
@@ -445,7 +532,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Token breakdown */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <div>
                 <p className="text-xs text-muted-foreground font-medium">Total</p>
                 <p className="text-2xl font-bold tracking-tight mt-0.5">
@@ -565,13 +652,270 @@ export default function DashboardPage() {
         </Card>
       </motion.div>
 
-      {/* ---- Tables Row ---- */}
-      <div className="grid gap-6 lg:grid-cols-2 min-w-0">
-        {/* Usage by Model */}
+      {/* ---- Pie + Bar Charts Row ---- */}
+      <div className="grid gap-3 lg:grid-cols-3 mb-3 min-w-0">
+        {/* Top Models Used — Pie Chart */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.65 }}
+        >
+          <Card className="min-w-0 overflow-hidden h-full">
+            <CardHeader>
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md">
+                  <PieChartIcon className="h-5 w-5" />
+                </div>
+                <div>
+                  <CardTitle>Top Models Used</CardTitle>
+                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">Request distribution by model</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {sortedByModel.length === 0 ? (
+                <div className="flex h-[280px] items-center justify-center text-muted-foreground">
+                  No data
+                </div>
+              ) : (
+                <div className="flex flex-col sm:flex-row gap-4">
+                  {/* Pie chart */}
+                  <ChartContainer config={chartConfig} className="h-[280px] w-full sm:w-1/2 shrink-0">
+                    <PieChart>
+                      <Pie
+                        data={sortedByModel.slice(0, 5).map((m, i) => ({
+                          name: String(m.model ?? m.name ?? "Unknown"),
+                          value: (m.requests as number) ?? 0,
+                          fill: MODEL_COLORS[i % MODEL_COLORS.length],
+                        }))}
+                        dataKey="value"
+                        nameKey="name"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={55}
+                        outerRadius={90}
+                        paddingAngle={2}
+                        label={({ value }) => {
+                          const pct = totalModelRequests > 0 ? Math.round((value / totalModelRequests) * 100) : 0;
+                          return pct >= 5 ? `${pct}%` : "";
+                        }}
+                        labelLine={false}
+                      >
+                        {sortedByModel.slice(0, 5).map((_, i) => (
+                          <Cell key={i} fill={MODEL_COLORS[i % MODEL_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <ChartTooltip
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.length) return null;
+                          const entry = payload[0];
+                          const pct = totalModelRequests > 0 ? ((Number(entry.value) / totalModelRequests) * 100).toFixed(1) : "0";
+                          return (
+                            <div className="rounded-sm border border-border bg-card px-3 py-2 shadow-md">
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: entry.payload?.fill }} />
+                                <span className="text-xs font-medium text-foreground">{entry.name}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-4">
+                                <span className="text-xs text-muted-foreground">Requests</span>
+                                <span className="text-xs font-mono font-medium text-foreground">{formatNumber(Number(entry.value))}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-4">
+                                <span className="text-xs text-muted-foreground">Share</span>
+                                <span className="text-xs font-mono font-medium text-foreground">{pct}%</span>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                    </PieChart>
+                  </ChartContainer>
+
+                  {/* Detail legend */}
+                  <div className="flex flex-col justify-center gap-1.5 sm:w-1/2 min-w-0">
+                    {sortedByModel.slice(0, 5).map((m, i) => {
+                      const name = String(m.model ?? m.name ?? "Unknown");
+                      const requests = (m.requests as number) ?? 0;
+                      const tokens = (m.totalTokens as number) ?? (m.tokens as number) ?? 0;
+                      const cost = (m.cost as number) ?? 0;
+                      const pct = totalModelRequests > 0 ? ((requests / totalModelRequests) * 100).toFixed(1) : "0";
+                      return (
+                        <div key={i} className="flex items-center gap-2 py-1 px-2 rounded-sm hover:bg-muted/50 transition-colors">
+                          <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: MODEL_COLORS[i % MODEL_COLORS.length] }} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium truncate">{name}</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {formatNumber(requests)} req · {formatNumber(tokens)} tok · {formatCost(cost)}
+                            </p>
+                          </div>
+                          <span className="text-xs font-mono text-muted-foreground shrink-0">{pct}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Cost by Model — Bar Chart */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.7 }}
+        >
+          <Card className="min-w-0 overflow-hidden h-full">
+            <CardHeader>
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md ">
+                  <DollarSign className="h-5 w-5" />
+                </div>
+                <div>
+                  <CardTitle>Top Cost by Model</CardTitle>
+                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">Estimated cost breakdown</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {sortedByModelCost.length === 0 ? (
+                <div className="flex h-[280px] items-center justify-center text-muted-foreground">
+                  No data
+                </div>
+              ) : (
+                <ChartContainer config={chartConfig} className="h-[280px] w-full">
+                  <BarChart
+                    layout="vertical"
+                    data={sortedByModelCost.slice(0, 5).map((m, i) => ({
+                      name: String(m.model ?? m.name ?? "Unknown"),
+                      cost: (m.cost as number) ?? 0,
+                      fill: MODEL_COLORS[i % MODEL_COLORS.length],
+                    }))}
+                    margin={{ top: 5, right: 10, left: 0, bottom: 5 }}
+                  >
+                    <CartesianGrid horizontal={false} />
+                    <XAxis
+                      type="number"
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fontSize: 11 }}
+                      tickFormatter={(v: number) => formatCost(v)}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fontSize: 10 }}
+                      width={100}
+                    />
+                    <ChartTooltip
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
+                        const entry = payload[0];
+                        return (
+                          <div className="rounded-sm border border-border bg-card px-3 py-2 shadow-md">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: entry.payload?.fill }} />
+                              <span className="text-xs font-medium text-foreground">{entry.payload?.name}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-xs text-muted-foreground">Cost</span>
+                              <span className="text-xs font-mono font-medium text-emerald-500">{formatCost(Number(entry.value))}</span>
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Bar dataKey="cost" radius={[0, 4, 4, 0]}>
+                      {sortedByModelCost.slice(0, 5).map((_, i) => (
+                        <Cell key={i} fill={MODEL_COLORS[i % MODEL_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ChartContainer>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Token Spend by Day — Bar Chart */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.72 }}
+        >
+          <Card className="min-w-0 overflow-hidden h-full">
+            <CardHeader>
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md ">
+                  <BarChart3 className="h-5 w-5" />
+                </div>
+                <div>
+                  <CardTitle>Token Spend by Day</CardTitle>
+                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">Last 7 days</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {weekChart.length === 0 ? (
+                <div className="flex h-[280px] items-center justify-center text-muted-foreground">
+                  No data
+                </div>
+              ) : (
+                <ChartContainer config={{ cost: { label: "Cost", color: "hsl(160, 60%, 50%)" } }} className="h-[280px] w-full">
+                  <BarChart
+                    data={weekChart.map((bucket) => ({
+                      label: bucket.label,
+                      cost: Number(bucket.cost ?? 0),
+                    }))}
+                    margin={{ top: 5, right: 10, left: 0, bottom: 5 }}
+                  >
+                    <CartesianGrid vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fontSize: 10 }}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fontSize: 11 }}
+                      tickFormatter={(v: number) => formatCost(v)}
+                      width={50}
+                    />
+                    <ChartTooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        return (
+                          <div className="rounded-sm border border-border bg-card px-3 py-2 shadow-md">
+                            <p className="text-xs font-medium text-foreground mb-1">{label}</p>
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-xs text-muted-foreground">Cost</span>
+                              <span className="text-xs font-mono font-medium text-emerald-500">{formatCost(Number(payload[0].value))}</span>
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Bar dataKey="cost" fill="hsl(160, 60%, 50%)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ChartContainer>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+
+      {/* ---- Tables Row ---- */}
+      <div className="grid gap-3 lg:grid-cols-2 min-w-0">
+        {/* Usage by Model */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.75 }}
         >
           <Card className="min-w-0 overflow-hidden">
             <CardHeader>

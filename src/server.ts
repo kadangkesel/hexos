@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { validateApiKey, getApiKeys, listConnections, removeConnection, setConnectionStatus, exportData, importData, saveConnection, deductCredit, getMitmAliases, setMitmAlias, removeMitmAlias, setMitmAliasesForTool, type Connection } from "./auth/store.ts";
+import { validateApiKey, getApiKeys, listConnections, removeConnection, setConnectionStatus, exportData, importData, saveConnection, deductCredit, type Connection } from "./auth/store.ts";
 import { proxyRequest } from "./proxy/handler.ts";
 import { listModels, resolveModel, MODEL_CATALOG } from "./config/models.ts";
 import { log } from "./utils/logger.ts";
@@ -68,6 +68,7 @@ export function createApp() {
   // Initialize pricing data (loads cache, refreshes in background)
   initPricing().catch((err) => log.warn(`Pricing init: ${err.message}`));
 
+  const serverStartedAt = Date.now();
   const app = new Hono();
 
   // CORS for dashboard
@@ -351,6 +352,10 @@ export function createApp() {
         totalTokens: todayStats.totalTokens,
         totalCost: todayStats.totalCost,
         successRate: todayStats.successRate,
+      },
+      server: {
+        startedAt: serverStartedAt,
+        uptimeMs: Date.now() - serverStartedAt,
       },
       byModel: stats.byModel,
       byAccount: stats.byAccount,
@@ -1810,121 +1815,6 @@ export function createApp() {
         format: p.format,
       })),
     });
-  });
-
-  // ── MITM API routes ──────────────────────────────────────────
-
-  /** GET /api/mitm — Full MITM status */
-  app.get("/api/mitm", async (c) => {
-    try {
-      const { getMitmStatus } = await import("./mitm/manager.ts");
-      const status = await getMitmStatus();
-      const aliases = getMitmAliases();
-      return c.json({ ...status, aliases });
-    } catch (e: any) {
-      return c.json({ error: e.message }, 500);
-    }
-  });
-
-  /** POST /api/mitm/start — Start MITM server */
-  app.post("/api/mitm/start", async (c) => {
-    try {
-      const { startServer } = await import("./mitm/manager.ts");
-      const body = await c.req.json().catch(() => ({}));
-      const keys = getApiKeys();
-      const apiKey = keys[0] || "";
-      const tools: string[] = Array.isArray(body.tools) ? body.tools : [];
-      const result = await startServer(apiKey, body.sudoPassword || null, tools);
-      return c.json(result);
-    } catch (e: any) {
-      return c.json({ error: e.message }, 500);
-    }
-  });
-
-  /** POST /api/mitm/stop — Stop MITM server */
-  app.post("/api/mitm/stop", async (c) => {
-    try {
-      const { stopServer } = await import("./mitm/manager.ts");
-      const body = await c.req.json().catch(() => ({}));
-      const result = await stopServer(body.sudoPassword || null);
-      return c.json(result);
-    } catch (e: any) {
-      return c.json({ error: e.message }, 500);
-    }
-  });
-
-  /** POST /api/mitm/enable — Enable DNS for a tool */
-  app.post("/api/mitm/enable", async (c) => {
-    try {
-      const { enableToolDNS } = await import("./mitm/manager.ts");
-      const body = await c.req.json();
-      if (!body.tool) return c.json({ error: "tool is required" }, 400);
-      const result = await enableToolDNS(body.tool, body.sudoPassword || null);
-      return c.json(result);
-    } catch (e: any) {
-      return c.json({ error: e.message }, 500);
-    }
-  });
-
-  /** POST /api/mitm/disable — Disable DNS for a tool */
-  app.post("/api/mitm/disable", async (c) => {
-    try {
-      const { disableToolDNS } = await import("./mitm/manager.ts");
-      const body = await c.req.json();
-      if (!body.tool) return c.json({ error: "tool is required" }, 400);
-      const result = await disableToolDNS(body.tool, body.sudoPassword || null);
-      return c.json(result);
-    } catch (e: any) {
-      return c.json({ error: e.message }, 500);
-    }
-  });
-
-  /** GET /api/mitm/alias — Get all model aliases */
-  app.get("/api/mitm/alias", (c) => {
-    return c.json(getMitmAliases());
-  });
-
-  /** POST /api/mitm/alias — Set a model alias */
-  app.post("/api/mitm/alias", async (c) => {
-    try {
-      const body = await c.req.json();
-      if (!body.tool || !body.sourceModel || !body.targetModel) {
-        return c.json({ error: "tool, sourceModel, and targetModel are required" }, 400);
-      }
-      await setMitmAlias(body.tool, body.sourceModel, body.targetModel);
-      return c.json({ success: true });
-    } catch (e: any) {
-      return c.json({ error: e.message }, 500);
-    }
-  });
-
-  /** DELETE /api/mitm/alias — Remove a model alias */
-  app.delete("/api/mitm/alias", async (c) => {
-    try {
-      const body = await c.req.json();
-      if (!body.tool || !body.sourceModel) {
-        return c.json({ error: "tool and sourceModel are required" }, 400);
-      }
-      await removeMitmAlias(body.tool, body.sourceModel);
-      return c.json({ success: true });
-    } catch (e: any) {
-      return c.json({ error: e.message }, 500);
-    }
-  });
-
-  /** PUT /api/mitm/alias/:tool — Replace all aliases for a tool */
-  app.put("/api/mitm/alias/:tool", async (c) => {
-    try {
-      const tool = c.req.param("tool");
-      const body = await c.req.json();
-      if (!body.aliases || typeof body.aliases !== "object") {
-        return c.json({ error: "aliases object is required" }, 400);
-      }
-      await setMitmAliasesForTool(tool, body.aliases);
-      return c.json({ success: true });
-    } catch (e: any) {
-      return c.json({ error: e.message }, 500);
-    }
   });
 
   // --- Serve embedded dashboard (static export) ---

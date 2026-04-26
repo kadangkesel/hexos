@@ -228,13 +228,17 @@ export default function CodexProviderPage() {
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {connections.slice(0, visibleCount).map((conn) => {
-                    const primary = conn.credit?.primaryUsedPercent ?? 0;
-                    const secondary = conn.credit?.secondaryUsedPercent ?? 0;
-                    const primaryColor = primary > 80 ? "bg-red-500" : primary > 50 ? "bg-amber-500" : "bg-emerald-500";
-                    const secondaryColor = secondary > 80 ? "bg-red-500" : secondary > 50 ? "bg-amber-500" : "bg-emerald-500";
-
                     const primaryResetAt = conn.credit?.primaryResetAt;
                     const secondaryResetAt = conn.credit?.secondaryResetAt;
+
+                    // If reset time has passed, quota has reset — force percentage to 0
+                    const primaryExpired = primaryResetAt != null && primaryResetAt <= nowRef.current;
+                    const secondaryExpired = secondaryResetAt != null && secondaryResetAt <= nowRef.current;
+
+                    const primary = primaryExpired ? 0 : (conn.credit?.primaryUsedPercent ?? 0);
+                    const secondary = secondaryExpired ? 0 : (conn.credit?.secondaryUsedPercent ?? 0);
+                    const primaryColor = primary > 80 ? "bg-red-500" : primary > 50 ? "bg-amber-500" : "bg-emerald-500";
+                    const secondaryColor = secondary > 80 ? "bg-red-500" : secondary > 50 ? "bg-amber-500" : "bg-emerald-500";
 
                     // 5h limit: show hours + minutes
                     const primaryTotalMin = primaryResetAt ? Math.max(0, Math.round((primaryResetAt - nowRef.current) / 60)) : null;

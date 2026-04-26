@@ -52,9 +52,13 @@ export interface UsageState {
   chartLoading: boolean;
   chartError: string | null;
 
+  weekChart: ChartBucket[];
+  weekChartLoading: boolean;
+
   fetchRecords: (params?: UsageRecordsParams) => Promise<void>;
   fetchStats: (since?: string) => Promise<void>;
   fetchChart: (range?: ChartRange) => Promise<void>;
+  fetchWeekChart: () => Promise<void>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -86,6 +90,9 @@ export const useUsageStore = create<UsageState>()((set) => ({
   chartRange: "day",
   chartLoading: false,
   chartError: null,
+
+  weekChart: [],
+  weekChartLoading: false,
 
   fetchRecords: async (params) => {
     set({ recordsLoading: true, recordsError: null });
@@ -139,6 +146,19 @@ export const useUsageStore = create<UsageState>()((set) => ({
           err instanceof Error ? err.message : "Failed to fetch chart data",
         chartLoading: false,
       });
+    }
+  },
+
+  fetchWeekChart: async () => {
+    set({ weekChartLoading: true });
+    try {
+      const res = await apiFetch<{ range: string; buckets: ChartBucket[] } | ChartBucket[]>(
+        `/api/usage/chart?range=week`,
+      );
+      const weekChart = Array.isArray(res) ? res : res.buckets ?? [];
+      set({ weekChart, weekChartLoading: false });
+    } catch {
+      set({ weekChartLoading: false });
     }
   },
 }));

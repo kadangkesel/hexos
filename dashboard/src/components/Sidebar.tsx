@@ -18,7 +18,7 @@ import {
   Zap,
   List,
   Search,
-  Radar,
+  
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
@@ -49,7 +49,7 @@ const navItems = [
   { label: "Filters", icon: Shield, href: "/filters" },
   { label: "API Key", icon: Key, href: "/api-key" },
   { label: "Integration", icon: LinkIcon, href: "/integration" },
-  { label: "MITM Proxy", icon: Radar, href: "/mitm" },
+
 ];
 
 const proxySubItems = [

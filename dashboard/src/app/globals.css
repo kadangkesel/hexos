@@ -91,7 +91,7 @@
   --code-number: oklch(0.655 0.0326 48.998);
   --code-selection: oklch(0.96 0.01 48.998);
   --code-border: oklch(0.9 0.0098 48.998);
-  --radius: 1rem;
+  --radius: 0rem;
 }
 
 /* Dark theme - Halloween inspired */
@@ -112,7 +112,7 @@
     --accent-foreground: oklch(1 0 0);
     --destructive: oklch(0.577 0.245 27.325);
     --destructive-foreground: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 0.125);
+    --border: oklch(100% 0.00011 271.152 / 0.062);
     --input: oklch(1 0 0 / 0.2);
     --ring: oklch(0.837 0.128 66.29);
     --chart-1: oklch(0.837 0.128 66.29);
@@ -128,7 +128,7 @@
     --sidebar-accent-foreground: oklch(1 0 0);
     --sidebar-border: oklch(1 0 0 / 0.125);
     --sidebar-ring: oklch(0.646 0.222 41.116);
-    --radius: 0.625rem;
+    --radius: 0rem;
     --primary-light: oklch(0.901 0.076 70.697);
     --primary-dark: oklch(0.837 0.128 66.29);
     --primary-ring: oklch(0.75 0.183 55.934);
