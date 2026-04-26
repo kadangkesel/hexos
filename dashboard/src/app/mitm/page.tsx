@@ -199,7 +199,8 @@ export default function MitmPage() {
 
   /* ---- derived ---- */
   const isRunning = status?.running ?? false;
-  const showPasswordField = !isRunning;
+  const isWindows = typeof navigator !== "undefined" && navigator.userAgent?.includes("Windows");
+  const showPasswordField = !isRunning && !isWindows;
 
   /* ---- collect all aliases into flat rows ---- */
   const aliasRows: { tool: string; source: string; target: string }[] = [];
@@ -308,6 +309,11 @@ export default function MitmPage() {
                         onChange={(e) => setSudoPassword(e.target.value)}
                       />
                     </div>
+                  )}
+                  {isWindows && !isRunning && (
+                    <p className="text-muted-foreground text-xs">
+                      Windows: UAC admin prompt will appear when starting server or enabling DNS.
+                    </p>
                   )}
 
                   {!isRunning ? (

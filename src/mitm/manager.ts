@@ -96,9 +96,13 @@ function resolveServerPath(): string {
   if (process.env.MITM_SERVER_PATH) return process.env.MITM_SERVER_PATH;
   const fromCwd = path.join(process.cwd(), "src", "mitm", "server.ts");
   if (fs.existsSync(fromCwd)) return fromCwd;
-  // Fallback: relative to this file
-  const sibling = path.join(path.dirname(new URL(import.meta.url).pathname), "server.ts");
-  if (fs.existsSync(sibling)) return sibling;
+  // Fallback: relative to this file (handle Windows file:// URLs)
+  try {
+    const fileUrl = new URL(import.meta.url);
+    const dirPath = path.dirname(IS_WIN ? fileUrl.pathname.replace(/^\//, "") : fileUrl.pathname);
+    const sibling = path.join(dirPath, "server.ts");
+    if (fs.existsSync(sibling)) return sibling;
+  } catch { /* ignore */ }
   return fromCwd;
 }
 

@@ -203,18 +203,38 @@ const server = https.createServer(sslOptions, async (req: IncomingMessage, res: 
 });
 
 function killPort(port: number): void {
+  const IS_WIN = process.platform === "win32";
   try {
-    const pids = execSync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`, {
-      encoding: "utf-8",
-      windowsHide: true,
-    }).trim();
-    if (!pids) return;
-    const pidList = pids.split("\n").filter((p) => p && Number(p) !== process.pid);
-    if (pidList.length === 0) return;
-    pidList.forEach((pid) => {
-      try { process.kill(Number(pid), "SIGKILL"); } catch { /* ignore */ }
-    });
-    log(`Killed ${pidList.length} process(es) on port ${port}`);
+    if (IS_WIN) {
+      // Windows: use netstat + taskkill
+      const output = execSync(`netstat -ano | findstr ":${port}" | findstr "LISTENING"`, {
+        encoding: "utf-8",
+        windowsHide: true,
+      }).trim();
+      if (!output) return;
+      const pids = new Set<number>();
+      for (const line of output.split("\n")) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parseInt(parts[parts.length - 1], 10);
+        if (pid && pid !== process.pid && pid > 4) pids.add(pid);
+      }
+      for (const pid of pids) {
+        try { execSync(`taskkill /F /PID ${pid}`, { windowsHide: true }); } catch { /* ignore */ }
+      }
+      if (pids.size > 0) log(`Killed ${pids.size} process(es) on port ${port}`);
+    } else {
+      const pids = execSync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`, {
+        encoding: "utf-8",
+        windowsHide: true,
+      }).trim();
+      if (!pids) return;
+      const pidList = pids.split("\n").filter((p) => p && Number(p) !== process.pid);
+      if (pidList.length === 0) return;
+      pidList.forEach((pid) => {
+        try { process.kill(Number(pid), "SIGKILL"); } catch { /* ignore */ }
+      });
+      log(`Killed ${pidList.length} process(es) on port ${port}`);
+    }
   } catch (e: any) {
     if (e.status !== 1) throw e;
   }

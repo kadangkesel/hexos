@@ -85,16 +85,22 @@ export async function addDNSEntry(tool: string, sudoPassword: string | null): Pr
   const entries = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\n");
   try {
     if (IS_WIN) {
-      const toAppend = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\r\n") + "\r\n";
-      fs.appendFileSync(HOSTS_FILE, toAppend, "utf8");
-      execSync("ipconfig /flushdns", { windowsHide: true });
+      // Windows: use PowerShell with admin elevation to append to hosts file
+      const lines = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("`r`n");
+      const psCmd = `Add-Content -Path '${HOSTS_FILE}' -Value '${lines}' -Encoding UTF8; ipconfig /flushdns | Out-Null`;
+      execSync(`powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-Command','${psCmd.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden"`, {
+        windowsHide: true,
+        timeout: 30000,
+      });
     } else {
       await execWithPassword(`echo "${entries}" >> ${HOSTS_FILE}`, sudoPassword);
       await flushDNS(sudoPassword);
     }
     console.log(`🌐 DNS ${tool}: ✅ added ${entriesToAdd.join(", ")}`);
   } catch (error: any) {
-    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password" : "Failed to add DNS entry";
+    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password"
+      : IS_WIN && error.message?.includes("canceled") ? "Admin elevation was cancelled"
+      : "Failed to add DNS entry";
     throw new Error(msg);
   }
 }
@@ -109,10 +115,13 @@ export async function removeDNSEntry(tool: string, sudoPassword: string | null):
   }
   try {
     if (IS_WIN) {
-      const content = fs.readFileSync(HOSTS_FILE, "utf8");
-      const filtered = content.split(/\r?\n/).filter((l) => !entriesToRemove.some((h) => l.includes(h))).join("\r\n");
-      fs.writeFileSync(HOSTS_FILE, filtered, "utf8");
-      execSync("ipconfig /flushdns", { windowsHide: true });
+      // Windows: use PowerShell with admin elevation to remove from hosts file
+      const patterns = entriesToRemove.map((h) => `'${h}'`).join(",");
+      const psCmd = `$h = Get-Content '${HOSTS_FILE}'; $p = @(${patterns}); $h | Where-Object { $l = $_; -not ($p | Where-Object { $l -match $_ }) } | Set-Content '${HOSTS_FILE}' -Encoding UTF8; ipconfig /flushdns | Out-Null`;
+      execSync(`powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-Command','${psCmd.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden"`, {
+        windowsHide: true,
+        timeout: 30000,
+      });
     } else {
       for (const host of entriesToRemove) {
         const sedCmd = IS_MAC
@@ -124,7 +133,9 @@ export async function removeDNSEntry(tool: string, sudoPassword: string | null):
     }
     console.log(`🌐 DNS ${tool}: ✅ removed ${entriesToRemove.join(", ")}`);
   } catch (error: any) {
-    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password" : "Failed to remove DNS entry";
+    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password"
+      : IS_WIN && error.message?.includes("canceled") ? "Admin elevation was cancelled"
+      : "Failed to remove DNS entry";
     throw new Error(msg);
   }
 }
