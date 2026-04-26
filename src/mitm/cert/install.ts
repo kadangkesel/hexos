@@ -81,19 +81,68 @@ async function installCertMac(sudoPassword: string | null, certPath: string): Pr
   }
 }
 
-async function installCertWindows(certPath: string): Promise<void> {
-  // certutil -addstore Root requires admin — use PowerShell elevation (UAC prompt)
-  const escapedPath = certPath.replace(/\\/g, "\\\\").replace(/'/g, "''");
-  const psCmd = `certutil -addstore Root '${escapedPath}'`;
+/**
+ * Run a command with admin elevation on Windows.
+ * Writes a temp .ps1 script, launches it via Start-Process -Verb RunAs,
+ * and polls a flag file to know when it's done.
+ */
+function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
+  const os = require("os");
+  const path = require("path");
+  const ts = Date.now();
+  const tmpDir = os.tmpdir();
+  const scriptPath = path.join(tmpDir, `hexos_mitm_${ts}.ps1`);
+  const flagPath = path.join(tmpDir, `hexos_mitm_${ts}.flag`);
+  const errPath = path.join(tmpDir, `hexos_mitm_${ts}.err`);
+
+  // Script: run command, write flag on success, write error on failure
+  const script = [
+    `try {`,
+    `  ${command}`,
+    `  Set-Content -Path '${flagPath.replace(/'/g, "''")}' -Value 'ok'`,
+    `} catch {`,
+    `  Set-Content -Path '${errPath.replace(/'/g, "''")}' -Value $_.Exception.Message`,
+    `}`,
+  ].join("\r\n");
+  fs.writeFileSync(scriptPath, script, "utf8");
+
+  // Launch elevated — this WILL show UAC prompt
   try {
     execSync(
-      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-Command','${psCmd.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden"`,
-      { windowsHide: true, timeout: 30000 },
+      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${scriptPath.replace(/'/g, "''")}' -Verb RunAs -Wait"`,
+      { timeout: timeoutMs, windowsHide: false },
     );
-    console.log("🔐 Cert: ✅ installed to Windows Root store");
-  } catch (error: any) {
-    throw new Error("Failed to install certificate — admin elevation may have been cancelled");
+  } catch {
+    // Start-Process itself may throw if user cancels UAC
   }
+
+  // Poll for result
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(flagPath)) {
+      try { fs.unlinkSync(flagPath); } catch {}
+      try { fs.unlinkSync(scriptPath); } catch {}
+      return; // success
+    }
+    if (fs.existsSync(errPath)) {
+      const errMsg = fs.readFileSync(errPath, "utf8").trim();
+      try { fs.unlinkSync(errPath); } catch {}
+      try { fs.unlinkSync(scriptPath); } catch {}
+      throw new Error(errMsg || "Elevated command failed");
+    }
+    // busy-wait 100ms
+    const start = Date.now();
+    while (Date.now() - start < 100) { /* spin */ }
+  }
+
+  try { fs.unlinkSync(scriptPath); } catch {}
+  throw new Error("Admin elevation timed out or was cancelled");
+}
+
+async function installCertWindows(certPath: string): Promise<void> {
+  const escaped = certPath.replace(/'/g, "''");
+  runElevatedWindows(`certutil -addstore Root '${escaped}' | Out-Null`);
+  console.log("🔐 Cert: ✅ installed to Windows Root store");
 }
 
 async function installCertLinux(sudoPassword: string | null, certPath: string): Promise<void> {
@@ -134,16 +183,8 @@ async function uninstallCertMac(sudoPassword: string | null, certPath: string): 
 }
 
 async function uninstallCertWindows(): Promise<void> {
-  const psCmd = `certutil -delstore Root '${CA_COMMON_NAME}'`;
-  try {
-    execSync(
-      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-Command','${psCmd.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden"`,
-      { windowsHide: true, timeout: 30000 },
-    );
-    console.log("🔐 Cert: ✅ uninstalled from Windows Root store");
-  } catch (error: any) {
-    throw new Error("Failed to uninstall certificate — admin elevation may have been cancelled");
-  }
+  runElevatedWindows(`certutil -delstore Root '${CA_COMMON_NAME}' | Out-Null`);
+  console.log("🔐 Cert: ✅ uninstalled from Windows Root store");
 }
 
 async function uninstallCertLinux(sudoPassword: string | null): Promise<void> {

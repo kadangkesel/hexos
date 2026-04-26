@@ -1,6 +1,7 @@
 import { exec, spawn, execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { TOOL_HOSTS } from "../config.ts";
 
 const IS_WIN = process.platform === "win32";
@@ -8,6 +9,55 @@ const IS_MAC = process.platform === "darwin";
 const HOSTS_FILE = IS_WIN
   ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "drivers", "etc", "hosts")
   : "/etc/hosts";
+
+/**
+ * Run a command with admin elevation on Windows.
+ * Writes a temp .ps1 script, launches it via Start-Process -Verb RunAs,
+ * and polls a flag file to know when it's done.
+ */
+function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
+  const ts = Date.now();
+  const tmpDir = os.tmpdir();
+  const scriptPath = path.join(tmpDir, `hexos_dns_${ts}.ps1`);
+  const flagPath = path.join(tmpDir, `hexos_dns_${ts}.flag`);
+  const errPath = path.join(tmpDir, `hexos_dns_${ts}.err`);
+
+  const script = [
+    `try {`,
+    `  ${command}`,
+    `  Set-Content -Path '${flagPath.replace(/'/g, "''")}' -Value 'ok'`,
+    `} catch {`,
+    `  Set-Content -Path '${errPath.replace(/'/g, "''")}' -Value $_.Exception.Message`,
+    `}`,
+  ].join("\r\n");
+  fs.writeFileSync(scriptPath, script, "utf8");
+
+  try {
+    execSync(
+      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${scriptPath.replace(/'/g, "''")}' -Verb RunAs -Wait"`,
+      { timeout: timeoutMs, windowsHide: false },
+    );
+  } catch { /* user may cancel UAC */ }
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(flagPath)) {
+      try { fs.unlinkSync(flagPath); } catch {}
+      try { fs.unlinkSync(scriptPath); } catch {}
+      return;
+    }
+    if (fs.existsSync(errPath)) {
+      const errMsg = fs.readFileSync(errPath, "utf8").trim();
+      try { fs.unlinkSync(errPath); } catch {}
+      try { fs.unlinkSync(scriptPath); } catch {}
+      throw new Error(errMsg || "Elevated command failed");
+    }
+    const start = Date.now();
+    while (Date.now() - start < 100) { /* spin */ }
+  }
+  try { fs.unlinkSync(scriptPath); } catch {}
+  throw new Error("Admin elevation timed out or was cancelled");
+}
 
 export function isSudoAvailable(): boolean {
   if (IS_WIN) return false;
@@ -85,13 +135,10 @@ export async function addDNSEntry(tool: string, sudoPassword: string | null): Pr
   const entries = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\n");
   try {
     if (IS_WIN) {
-      // Windows: use PowerShell with admin elevation to append to hosts file
+      // Windows: use elevated PowerShell to append to hosts file
       const lines = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("`r`n");
-      const psCmd = `Add-Content -Path '${HOSTS_FILE}' -Value '${lines}' -Encoding UTF8; ipconfig /flushdns | Out-Null`;
-      execSync(`powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-Command','${psCmd.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden"`, {
-        windowsHide: true,
-        timeout: 30000,
-      });
+      const hostsEsc = HOSTS_FILE.replace(/'/g, "''");
+      runElevatedWindows(`Add-Content -Path '${hostsEsc}' -Value '${lines}' -Encoding UTF8; ipconfig /flushdns | Out-Null`);
     } else {
       await execWithPassword(`echo "${entries}" >> ${HOSTS_FILE}`, sudoPassword);
       await flushDNS(sudoPassword);
@@ -115,13 +162,10 @@ export async function removeDNSEntry(tool: string, sudoPassword: string | null):
   }
   try {
     if (IS_WIN) {
-      // Windows: use PowerShell with admin elevation to remove from hosts file
+      // Windows: use elevated PowerShell to remove from hosts file
       const patterns = entriesToRemove.map((h) => `'${h}'`).join(",");
-      const psCmd = `$h = Get-Content '${HOSTS_FILE}'; $p = @(${patterns}); $h | Where-Object { $l = $_; -not ($p | Where-Object { $l -match $_ }) } | Set-Content '${HOSTS_FILE}' -Encoding UTF8; ipconfig /flushdns | Out-Null`;
-      execSync(`powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-Command','${psCmd.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden"`, {
-        windowsHide: true,
-        timeout: 30000,
-      });
+      const hostsEsc = HOSTS_FILE.replace(/'/g, "''");
+      runElevatedWindows(`$h = Get-Content '${hostsEsc}'; $p = @(${patterns}); $h | Where-Object { $l = $_; -not ($p | Where-Object { $l -match $_ }) } | Set-Content '${hostsEsc}' -Encoding UTF8; ipconfig /flushdns | Out-Null`);
     } else {
       for (const host of entriesToRemove) {
         const sedCmd = IS_MAC
