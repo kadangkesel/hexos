@@ -72,13 +72,13 @@ const TOOLS: ToolMeta[] = [
   },
   {
     id: "antigravity",
-    name: "Google Cloud Code",
+    name: "Antigravity",
     icon: Cloud,
     hosts: ["cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"],
   },
   {
     id: "kiro",
-    name: "Amazon Kiro",
+    name: "Kiro",
     icon: Cpu,
     hosts: ["q.us-east-1.amazonaws.com", "codewhisperer.us-east-1.amazonaws.com"],
   },
@@ -459,11 +459,16 @@ export default function MitmPage() {
                     </Select>
                   </div>
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                    <Label htmlFor="alias-source">Source Model</Label>
+                    <Label htmlFor="alias-source">
+                      Source Model
+                      <span className="ml-1 text-xs font-normal text-muted-foreground">
+                        (model name sent by IDE)
+                      </span>
+                    </Label>
                     <Input
                       id="alias-source"
                       className="font-mono text-sm"
-                      placeholder="e.g. gpt-4o"
+                      placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
                       value={aliasSource}
                       onChange={(e) => setAliasSource(e.target.value)}
                       onKeyDown={(e) => {
@@ -472,11 +477,16 @@ export default function MitmPage() {
                     />
                   </div>
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                    <Label htmlFor="alias-target">Target Model</Label>
+                    <Label htmlFor="alias-target">
+                      Target Model
+                      <span className="ml-1 text-xs font-normal text-muted-foreground">
+                        (Hexos model to use instead)
+                      </span>
+                    </Label>
                     <Input
                       id="alias-target"
                       className="font-mono text-sm"
-                      placeholder="e.g. cb/opus-4.6"
+                      placeholder="e.g. cb/opus-4.6, cl/sonnet-4.6"
                       value={aliasTarget}
                       onChange={(e) => setAliasTarget(e.target.value)}
                       onKeyDown={(e) => {
@@ -504,8 +514,14 @@ export default function MitmPage() {
                 {/* Aliases table */}
                 {aliasRows.length === 0 ? (
                   <p className="py-8 text-center text-sm text-muted-foreground">
-                    No model aliases configured. Add one above to remap model
-                    names in intercepted requests.
+                    No model aliases configured yet.
+                    <br />
+                    <span className="text-xs">
+                      Add an alias to remap the model name that the IDE sends (e.g.{" "}
+                      <code className="rounded bg-muted px-1">gpt-4o</code>) to a Hexos
+                      model (e.g. <code className="rounded bg-muted px-1">cb/opus-4.6</code>).
+                      Without an alias, requests pass through to the real upstream.
+                    </span>
                   </p>
                 ) : (
                   <div className="overflow-x-auto">
@@ -627,6 +643,10 @@ export default function MitmPage() {
                     <strong className="text-foreground">4. Model Aliases:</strong>{" "}
                     Optionally remap model names so the IDE&apos;s default model
                     is transparently replaced with your preferred Hexos model.
+                    For example, if Copilot sends <code className="rounded bg-muted px-1 py-0.5 text-xs">gpt-4o</code>,
+                    you can alias it to <code className="rounded bg-muted px-1 py-0.5 text-xs">cb/opus-4.6</code> so
+                    Hexos serves it from your Service accounts instead.
+                    Without an alias, the request passes through to the real provider unchanged.
                   </p>
                 </div>
               </CardContent>
