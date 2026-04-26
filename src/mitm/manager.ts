@@ -271,8 +271,8 @@ export async function startServer(
         const hosts = TOOL_HOSTS[tool];
         if (!hosts) continue;
         for (const host of hosts) {
-          // Only add if not already present (findstr returns errorlevel 1 if not found)
-          batLines.push(`findstr /C:"${host}" "%SystemRoot%\\System32\\drivers\\etc\\hosts" >nul 2>&1 || echo 127.0.0.1 ${host}>>"%SystemRoot%\\System32\\drivers\\etc\\hosts"`);
+          // Search for exact "127.0.0.1 host" to avoid substring matches (e.g. daily-cloudcode matching cloudcode)
+          batLines.push(`findstr /C:"127.0.0.1 ${host}" "%SystemRoot%\\System32\\drivers\\etc\\hosts" >nul 2>&1 || echo 127.0.0.1 ${host}>>"%SystemRoot%\\System32\\drivers\\etc\\hosts"`);
         }
       }
       batLines.push(`ipconfig /flushdns >nul 2>&1`);
