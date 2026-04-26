@@ -371,11 +371,24 @@ export async function stopServer(sudoPassword: string | null): Promise<{ running
   mitmRestartCount = 0;
   console.log("⏹ Stopping MITM server...");
 
-  const pidToKill = serverProcess && !serverProcess.killed
+  // Find PID to kill
+  let pidToKill = serverProcess && !serverProcess.killed
     ? serverProcess.pid
     : (() => { try { return parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10); } catch { return null; } })();
 
-  if (pidToKill && isProcessAlive(pidToKill)) {
+  // Windows: if no PID tracked, find process listening on port 443
+  if (!pidToKill && IS_WIN) {
+    try {
+      const output = execSync(`netstat -ano | findstr ":443" | findstr "LISTENING"`, { encoding: "utf-8", windowsHide: true }).trim();
+      for (const line of output.split("\n")) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parseInt(parts[parts.length - 1], 10);
+        if (pid && pid > 4) { pidToKill = pid; break; }
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (pidToKill) {
     console.log(`Killing MITM server (PID: ${pidToKill})...`);
     if (IS_WIN) {
       // Windows: elevated process needs elevated kill

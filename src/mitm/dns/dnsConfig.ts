@@ -34,7 +34,7 @@ function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
 
   try {
     execSync(
-      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${scriptPath.replace(/'/g, "''")}' -Verb RunAs -Wait"`,
+      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${scriptPath.replace(/'/g, "''")}' -Verb RunAs -Wait"`,
       { timeout: timeoutMs, windowsHide: false },
     );
   } catch { /* user may cancel UAC */ }
@@ -163,10 +163,12 @@ export async function removeDNSEntry(tool: string, sudoPassword: string | null):
   }
   try {
     if (IS_WIN) {
-      // Windows: use elevated PowerShell to remove from hosts file
-      const patterns = entriesToRemove.map((h) => `'${h}'`).join(",");
+      // Windows: use elevated PowerShell to remove entries from hosts file
       const hostsEsc = HOSTS_FILE.replace(/'/g, "''");
-      runElevatedWindows(`$h = Get-Content '${hostsEsc}'; $p = @(${patterns}); $h | Where-Object { $l = $_; -not ($p | Where-Object { $l -match $_ }) } | Set-Content '${hostsEsc}' -Encoding UTF8; ipconfig /flushdns | Out-Null`);
+      // Build a simple filter: read file, exclude lines containing any of the hosts, write back
+      const conditions = entriesToRemove.map((h) => `$_ -notmatch '${h}'`).join(" -and ");
+      const cmd = `(Get-Content '${hostsEsc}') | Where-Object { ${conditions} } | Set-Content '${hostsEsc}' -Encoding UTF8; ipconfig /flushdns | Out-Null`;
+      runElevatedWindows(cmd);
     } else {
       for (const host of entriesToRemove) {
         const sedCmd = IS_MAC
