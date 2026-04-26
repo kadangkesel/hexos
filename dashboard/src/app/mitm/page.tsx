@@ -412,7 +412,6 @@ export default function MitmPage() {
                                   handleToggleTool(tool.id, checked)
                                 }
                                 disabled={
-                                  !isRunning ||
                                   !!tool.comingSoon ||
                                   actionLoading === tool.id
                                 }

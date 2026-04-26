@@ -74,6 +74,49 @@ export function checkAllDNSStatus(): Record<string, boolean> {
   }
 }
 
+/** Windows: write to hosts file, with elevation fallback */
+function winWriteHosts(action: "append" | "rewrite", content: string): void {
+  // Try direct write first (works if running as admin)
+  try {
+    if (action === "append") {
+      fs.appendFileSync(HOSTS_FILE, content, "utf8");
+    } else {
+      fs.writeFileSync(HOSTS_FILE, content, "utf8");
+    }
+    try { execSync("ipconfig /flushdns", { windowsHide: true, stdio: "pipe" }); } catch {}
+    return;
+  } catch (e: any) {
+    if (e.code !== "EPERM" && e.code !== "EACCES") throw e;
+    // Permission denied — try elevated
+  }
+
+  // Fallback: write a temp .ps1 and run elevated
+  const os = require("os");
+  const tmpScript = path.join(os.tmpdir(), `hexos_hosts_${Date.now()}.ps1`);
+  let psCmd: string;
+  if (action === "append") {
+    // Write content to a temp file, then append via elevated PS
+    const tmpData = path.join(os.tmpdir(), `hexos_hosts_data_${Date.now()}.txt`);
+    fs.writeFileSync(tmpData, content, "utf8");
+    psCmd = `Get-Content '${tmpData}' | Add-Content '${HOSTS_FILE}'; Remove-Item '${tmpData}' -ErrorAction SilentlyContinue; ipconfig /flushdns | Out-Null`;
+  } else {
+    const tmpData = path.join(os.tmpdir(), `hexos_hosts_data_${Date.now()}.txt`);
+    fs.writeFileSync(tmpData, content, "utf8");
+    psCmd = `Copy-Item '${tmpData}' '${HOSTS_FILE}' -Force; Remove-Item '${tmpData}' -ErrorAction SilentlyContinue; ipconfig /flushdns | Out-Null`;
+  }
+  fs.writeFileSync(tmpScript, psCmd, "utf8");
+  try {
+    execSync(
+      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${tmpScript}' -Verb RunAs -Wait -WindowStyle Hidden"`,
+      { windowsHide: true, timeout: 30000 },
+    );
+  } catch {
+    try { fs.unlinkSync(tmpScript); } catch {}
+    throw new Error("Permission denied — approve the admin prompt or run Hexos as Administrator");
+  }
+  try { fs.unlinkSync(tmpScript); } catch {}
+}
+
 export async function addDNSEntry(tool: string, sudoPassword: string | null): Promise<void> {
   const hosts = TOOL_HOSTS[tool];
   if (!hosts) throw new Error(`Unknown tool: ${tool}`);
@@ -84,10 +127,8 @@ export async function addDNSEntry(tool: string, sudoPassword: string | null): Pr
   }
   try {
     if (IS_WIN) {
-      // Windows: direct file write (requires admin). Append each host entry.
       const toAppend = "\r\n" + entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\r\n") + "\r\n";
-      fs.appendFileSync(HOSTS_FILE, toAppend, "utf8");
-      try { execSync("ipconfig /flushdns", { windowsHide: true, stdio: "pipe" }); } catch {}
+      winWriteHosts("append", toAppend);
     } else {
       const entries = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\n");
       await execWithPassword(`echo "${entries}" >> ${HOSTS_FILE}`, sudoPassword);
@@ -95,11 +136,7 @@ export async function addDNSEntry(tool: string, sudoPassword: string | null): Pr
     }
     console.log(`🌐 DNS ${tool}: ✅ added ${entriesToAdd.join(", ")}`);
   } catch (error: any) {
-    if (IS_WIN && (error.code === "EPERM" || error.code === "EACCES")) {
-      throw new Error("Permission denied — run Hexos as Administrator to manage DNS");
-    }
-    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password" : "Failed to add DNS entry";
-    throw new Error(msg);
+    throw new Error(error.message || "Failed to add DNS entry");
   }
 }
 
@@ -113,11 +150,9 @@ export async function removeDNSEntry(tool: string, sudoPassword: string | null):
   }
   try {
     if (IS_WIN) {
-      // Windows: direct file read/filter/write (requires admin)
       const content = fs.readFileSync(HOSTS_FILE, "utf8");
       const filtered = content.split(/\r?\n/).filter((line) => !entriesToRemove.some((h) => line.includes(h))).join("\r\n");
-      fs.writeFileSync(HOSTS_FILE, filtered, "utf8");
-      try { execSync("ipconfig /flushdns", { windowsHide: true, stdio: "pipe" }); } catch {}
+      winWriteHosts("rewrite", filtered);
     } else {
       for (const host of entriesToRemove) {
         const sedCmd = IS_MAC
@@ -129,11 +164,7 @@ export async function removeDNSEntry(tool: string, sudoPassword: string | null):
     }
     console.log(`🌐 DNS ${tool}: ✅ removed ${entriesToRemove.join(", ")}`);
   } catch (error: any) {
-    if (IS_WIN && (error.code === "EPERM" || error.code === "EACCES")) {
-      throw new Error("Permission denied — run Hexos as Administrator to manage DNS");
-    }
-    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password" : "Failed to remove DNS entry";
-    throw new Error(msg);
+    throw new Error(error.message || "Failed to remove DNS entry");
   }
 }
 

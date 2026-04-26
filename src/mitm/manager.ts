@@ -419,8 +419,6 @@ export async function stopServer(sudoPassword: string | null): Promise<{ running
 }
 
 export async function enableToolDNS(tool: string, sudoPassword: string | null): Promise<{ success: boolean }> {
-  const status = await getMitmStatus();
-  if (!status.running) throw new Error("MITM server is not running. Start the server first.");
   const password = sudoPassword || getCachedPassword();
   await addDNSEntry(tool, password);
   return { success: true };
