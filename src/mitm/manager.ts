@@ -162,6 +162,7 @@ export async function getMitmStatus(): Promise<{
   let pid = serverPid;
 
   if (!running) {
+    // Check PID file
     try {
       if (fs.existsSync(PID_FILE)) {
         const savedPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
@@ -173,6 +174,15 @@ export async function getMitmStatus(): Promise<{
         }
       }
     } catch { /* ignore */ }
+  }
+
+  // On Windows, the elevated process isn't tracked — use a quick health check
+  if (!running && IS_WIN) {
+    const health = await pollMitmHealth(2000);
+    if (health) {
+      running = true;
+      pid = health.pid;
+    }
   }
 
   const dnsStatus = checkAllDNSStatus();
@@ -244,50 +254,42 @@ export async function startServer(
   const bunPath = process.execPath || "bun";
 
   if (IS_WIN) {
-    // Windows: port 443 needs admin — write a launcher script, elevate it, fire-and-forget
+    // Windows: port 443 needs admin — write a .bat launcher, elevate it
     if (!fs.existsSync(MITM_DIR)) fs.mkdirSync(MITM_DIR, { recursive: true });
 
-    // 1. Write the actual MITM server runner script
-    const runnerPath = path.join(MITM_DIR, "_mitm_run.ps1");
-    const pidFileSafe = PID_FILE.replace(/\\/g, "\\\\").replace(/'/g, "''");
-    fs.writeFileSync(runnerPath, [
-      `$ErrorActionPreference = 'Stop'`,
-      `$env:ROUTER_API_KEY = '${apiKey.replace(/'/g, "''")}'`,
-      `$env:MITM_ROUTER_BASE = '${mitmRouterBase.replace(/'/g, "''")}'`,
-      `$env:HOME = '${os.homedir().replace(/'/g, "''")}'`,
-      `# Write our PID so hexos can track us`,
-      `Set-Content -Path '${pidFileSafe}' -Value $PID -Encoding UTF8`,
-      `# Run the MITM server (blocks until server exits)`,
-      `& '${bunPath.replace(/'/g, "''").replace(/\\/g, "\\\\")}' run '${SERVER_PATH.replace(/'/g, "''").replace(/\\/g, "\\\\")}'`,
-    ].join("\r\n"), "utf8");
+    // Write a batch file that runs the MITM server
+    const batPath = path.join(MITM_DIR, "_mitm_run.bat");
+    const batContent = [
+      `@echo off`,
+      `title Hexos MITM Server`,
+      `set ROUTER_API_KEY=${apiKey}`,
+      `set MITM_ROUTER_BASE=${mitmRouterBase}`,
+      `set HOME=${os.homedir()}`,
+      `echo Starting Hexos MITM server on port 443...`,
+      `"${bunPath}" run "${SERVER_PATH}"`,
+      `echo.`,
+      `echo MITM server stopped. Press any key to close.`,
+      `pause >nul`,
+    ].join("\r\n");
+    fs.writeFileSync(batPath, batContent, "utf8");
 
-    // 2. Launch elevated — do NOT use -Wait (that blocks forever)
+    // Launch elevated — fire-and-forget (no -Wait)
     try {
+      // PowerShell single-quoted strings don't need backslash escaping
+      const psPath = batPath.replace(/'/g, "''");
       execSync(
-        `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${runnerPath.replace(/'/g, "''")}' -Verb RunAs"`,
+        `powershell -NoProfile -Command "Start-Process '${psPath}' -Verb RunAs"`,
         { windowsHide: false, timeout: 15000 },
       );
     } catch {
-      // User may have cancelled UAC
       throw new Error("MITM server start cancelled — admin elevation required on Windows");
     }
 
-    // 3. Don't track serverProcess on Windows — it's a separate elevated process
+    // Don't track serverProcess on Windows — it's a separate elevated process
     serverProcess = null;
     mitmLastStartTime = Date.now();
 
-    // Wait for PID file to appear (written by the runner script)
-    const pidDeadline = Date.now() + 5000;
-    while (Date.now() < pidDeadline) {
-      try {
-        if (fs.existsSync(PID_FILE)) {
-          const raw = fs.readFileSync(PID_FILE, "utf-8").trim();
-          const pid = parseInt(raw, 10);
-          if (pid > 0) { serverPid = pid; break; }
-        }
-      } catch { /* ignore */ }
-      await new Promise((r) => setTimeout(r, 300));
-    }
+    // Wait for server to be healthy (no PID tracking on Windows, use health check only)
   } else if (isSudoAvailable()) {
     const inlineCmd = [
       `HOME=${shellQuoteSingle(os.homedir())}`,
