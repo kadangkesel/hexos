@@ -12,6 +12,7 @@ export interface DashboardStats {
   totalRequests: number;
   totalTokens: number;
   uptime: number;
+  totalCost: number;
   [key: string]: unknown; // allow extra fields from the API
 }
 

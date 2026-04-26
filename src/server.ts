@@ -18,6 +18,7 @@ import { join, extname, dirname } from "path";
 import { homedir } from "os";
 import { existsSync, readFileSync } from "fs";
 import { fileURLToPath } from "url";
+import { initPricing, getModelPricing, getPricingStats, refreshPricing } from "./config/pricing.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -64,6 +65,9 @@ const batchConnectTasks = new Map<string, {
 const batchCancelFlags = new Map<string, boolean>();
 
 export function createApp() {
+  // Initialize pricing data (loads cache, refreshes in background)
+  initPricing().catch((err) => log.warn(`Pricing init: ${err.message}`));
+
   const app = new Hono();
 
   // CORS for dashboard
@@ -306,7 +310,7 @@ export function createApp() {
       connections: listConnections().length,
       totalRequests: stats.totalRequests,
       totalTokens: stats.totalTokens,
-      totalCreditCost: stats.totalCreditCost,
+      totalCost: stats.totalCost,
     });
   });
 
@@ -338,14 +342,14 @@ export function createApp() {
         totalTokens: stats.totalTokens,
         totalPromptTokens: stats.totalPromptTokens,
         totalCompletionTokens: stats.totalCompletionTokens,
-        totalCreditCost: stats.totalCreditCost,
+        totalCost: stats.totalCost,
         successRate: stats.successRate,
         avgLatencyMs: stats.avgLatencyMs,
       },
       today: {
         totalRequests: todayStats.totalRequests,
         totalTokens: todayStats.totalTokens,
-        totalCreditCost: todayStats.totalCreditCost,
+        totalCost: todayStats.totalCost,
         successRate: todayStats.successRate,
       },
       byModel: stats.byModel,
@@ -1544,7 +1548,7 @@ export function createApp() {
       tokens: number;
       promptTokens: number;
       completionTokens: number;
-      creditCost: number;
+      cost: number;
       successCount: number;
       failCount: number;
     }> = [];
@@ -1565,7 +1569,7 @@ export function createApp() {
         tokens: 0,
         promptTokens: 0,
         completionTokens: 0,
-        creditCost: 0,
+        cost: 0,
         successCount: 0,
         failCount: 0,
       });
@@ -1579,7 +1583,7 @@ export function createApp() {
         buckets[bucketIdx].tokens += rec.totalTokens;
         buckets[bucketIdx].promptTokens += rec.promptTokens;
         buckets[bucketIdx].completionTokens += rec.completionTokens;
-        buckets[bucketIdx].creditCost += rec.creditCost;
+        buckets[bucketIdx].cost += rec.cost ?? 0;
         if (rec.success) buckets[bucketIdx].successCount++;
         else buckets[bucketIdx].failCount++;
       }
@@ -1588,7 +1592,24 @@ export function createApp() {
     return c.json({ range, buckets });
   });
 
-  // --- Content Filters ---
+  // --- Pricing ---
+  app.get("/api/pricing/stats", (c) => {
+    return c.json(getPricingStats());
+  });
+
+  app.get("/api/pricing/model/:modelId", (c) => {
+    const modelId = c.req.param("modelId");
+    const pricing = getModelPricing(modelId);
+    if (!pricing) return c.json({ error: "No pricing data for model" }, 404);
+    return c.json({ model: modelId, ...pricing });
+  });
+
+  app.post("/api/pricing/refresh", async (c) => {
+    await refreshPricing();
+    return c.json({ ok: true, ...getPricingStats() });
+  });
+
+  // --- validations ---
   app.get("/api/filters", (c) => {
     return c.json(getFilterConfig());
   });

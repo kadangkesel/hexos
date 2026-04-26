@@ -11,6 +11,7 @@ export interface UsageRecord {
   accountId: string;
   tokens: number;
   timestamp: string;
+  cost?: number;
   [key: string]: unknown;
 }
 

@@ -3,6 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { statSync } from "fs";
 import { log } from "../utils/logger.ts";
+import { calculateCost } from "../config/pricing.ts";
 
 const DATA_DIR = join(homedir(), ".hexos");
 const USAGE_FILE = join(DATA_DIR, "usage.json");
@@ -33,6 +34,8 @@ export interface UsageRecord {
   responseBody?: string;
   // Legacy field (kept for backward compat with existing records, always 0 for new)
   creditCost?: number;
+  // Estimated cost in USD based on global model pricing (LiteLLM)
+  cost?: number;
 }
 
 export interface UsageStats {
@@ -40,6 +43,7 @@ export interface UsageStats {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   totalTokens: number;
+  totalCost: number;
   avgLatencyMs: number;
   successRate: number;
   byModel: Record<string, ModelStats>;
@@ -52,6 +56,7 @@ export interface ModelStats {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  cost: number;
 }
 
 export interface AccountStats {
@@ -61,6 +66,7 @@ export interface AccountStats {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  cost: number;
   lastUsed: number;
 }
 
@@ -203,6 +209,7 @@ export async function completeRequest(params: {
   record.latencyMs = params.latencyMs;
   record.success = params.success;
   record.responseBody = truncateBody(params.responseBody);
+  record.cost = calculateCost(record.model, record.promptTokens, record.completionTokens);
 
   // Auto-cleanup after completing
   await autoCleanup();
@@ -214,6 +221,7 @@ export async function completeRequest(params: {
     `prompt: ${record.promptTokens.toLocaleString()} | ` +
     `completion: ${record.completionTokens.toLocaleString()} | ` +
     `total: ${record.totalTokens.toLocaleString()} | ` +
+    `cost: $${(record.cost ?? 0).toFixed(4)} | ` +
     `${record.latencyMs}ms`
   );
 }
@@ -253,6 +261,7 @@ export async function recordUsage(params: {
     success: params.success,
     requestBody: truncateBody(params.requestBody),
     responseBody: truncateBody(params.responseBody),
+    cost: calculateCost(params.model, params.promptTokens, params.completionTokens),
   };
 
   db.data.records.push(record);
@@ -266,6 +275,7 @@ export async function recordUsage(params: {
     `prompt: ${record.promptTokens.toLocaleString()} | ` +
     `completion: ${record.completionTokens.toLocaleString()} | ` +
     `total: ${record.totalTokens.toLocaleString()} | ` +
+    `cost: $${(record.cost ?? 0).toFixed(4)} | ` +
     `${record.latencyMs}ms`
   );
 
@@ -316,6 +326,7 @@ export function getStats(since?: number): UsageStats {
     totalPromptTokens: 0,
     totalCompletionTokens: 0,
     totalTokens: 0,
+    totalCost: 0,
     avgLatencyMs: 0,
     successRate: 0,
     byModel: {},
@@ -328,9 +339,11 @@ export function getStats(since?: number): UsageStats {
   let successCount = 0;
 
   for (const r of records) {
+    const cost = r.cost ?? 0;
     stats.totalPromptTokens += r.promptTokens;
     stats.totalCompletionTokens += r.completionTokens;
     stats.totalTokens += r.totalTokens;
+    stats.totalCost += cost;
     totalLatency += r.latencyMs;
     if (r.success) successCount++;
 
@@ -342,6 +355,7 @@ export function getStats(since?: number): UsageStats {
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
+        cost: 0,
       };
     }
     const m = stats.byModel[r.model];
@@ -349,6 +363,7 @@ export function getStats(since?: number): UsageStats {
     m.promptTokens += r.promptTokens;
     m.completionTokens += r.completionTokens;
     m.totalTokens += r.totalTokens;
+    m.cost += cost;
 
     // By account
     if (!stats.byAccount[r.accountId]) {
@@ -359,6 +374,7 @@ export function getStats(since?: number): UsageStats {
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
+        cost: 0,
         lastUsed: 0,
       };
     }
@@ -367,6 +383,7 @@ export function getStats(since?: number): UsageStats {
     a.promptTokens += r.promptTokens;
     a.completionTokens += r.completionTokens;
     a.totalTokens += r.totalTokens;
+    a.cost += cost;
     if (r.timestamp > a.lastUsed) a.lastUsed = r.timestamp;
   }
 
