@@ -244,16 +244,24 @@ export async function startServer(
   const bunPath = process.execPath || "bun";
 
   if (IS_WIN) {
-    serverProcess = spawn(bunPath, ["run", SERVER_PATH], {
-      detached: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        ROUTER_API_KEY: apiKey,
-        MITM_ROUTER_BASE: mitmRouterBase,
-      },
-    });
+    // Windows: port 443 needs admin — spawn elevated via a wrapper script
+    const wrapperPath = path.join(MITM_DIR, "_mitm_start.ps1");
+    const wrapperContent = [
+      `$env:ROUTER_API_KEY = '${apiKey.replace(/'/g, "''")}'`,
+      `$env:MITM_ROUTER_BASE = '${mitmRouterBase.replace(/'/g, "''")}'`,
+      `$env:HOME = '${os.homedir().replace(/'/g, "''")}'`,
+      `& '${bunPath.replace(/'/g, "''")}' run '${SERVER_PATH.replace(/'/g, "''")}'`,
+    ].join("\r\n");
+    fs.writeFileSync(wrapperPath, wrapperContent, "utf8");
+
+    // Spawn elevated PowerShell that runs the wrapper — NOT hidden so it stays alive
+    serverProcess = spawn(
+      "powershell",
+      ["-NoProfile", "-Command",
+        `Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${wrapperPath.replace(/'/g, "''")}' -Verb RunAs -PassThru | ForEach-Object { $_.Id } | Set-Content '${PID_FILE.replace(/'/g, "''")}'`],
+      { detached: true, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    serverProcess.unref();
   } else if (isSudoAvailable()) {
     const inlineCmd = [
       `HOME=${shellQuoteSingle(os.homedir())}`,
@@ -285,7 +293,21 @@ export async function startServer(
     });
   }
 
-  if (serverProcess) {
+  if (IS_WIN) {
+    // Windows: elevated process is detached, we track via PID file + health check
+    if (!fs.existsSync(MITM_DIR)) fs.mkdirSync(MITM_DIR, { recursive: true });
+    mitmLastStartTime = Date.now();
+    // The launcher writes PID to PID_FILE, wait a moment for it
+    await new Promise((r) => setTimeout(r, 2000));
+    // Read PID from file (written by the launcher PowerShell)
+    try {
+      if (fs.existsSync(PID_FILE)) {
+        serverPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10) || null;
+      }
+    } catch { /* ignore */ }
+    // Detach — we don't track the launcher process
+    serverProcess = null;
+  } else if (serverProcess) {
     serverPid = serverProcess.pid || null;
     if (!fs.existsSync(MITM_DIR)) fs.mkdirSync(MITM_DIR, { recursive: true });
     if (serverPid) fs.writeFileSync(PID_FILE, String(serverPid));
@@ -297,10 +319,10 @@ export async function startServer(
 
     serverProcess.stderr?.on("data", (data: Buffer) => {
       const msg = data.toString().trim();
-      if (msg && (IS_WIN || (!msg.includes("Password:") && !msg.includes("password for")))) {
+      if (msg && (!msg.includes("Password:") && !msg.includes("password for"))) {
         console.error(`[MITM] ${msg}`);
       }
-      if (!IS_WIN && (msg.includes("incorrect password") || msg.includes("no password was provided"))) {
+      if (msg.includes("incorrect password") || msg.includes("no password was provided")) {
         setCachedPassword(null);
         mitmIsRestarting = true;
       }
@@ -315,8 +337,9 @@ export async function startServer(
     });
   }
 
-  // Step 4: Health check
-  const health = await pollMitmHealth(8000);
+  // Step 4: Health check — give Windows more time since UAC adds delay
+  const healthTimeout = IS_WIN ? 15000 : 8000;
+  const health = await pollMitmHealth(healthTimeout);
   if (!health) {
     if (serverProcess && !serverProcess.killed) {
       try { serverProcess.kill(); } catch { /* ignore */ }

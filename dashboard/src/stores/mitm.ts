@@ -45,10 +45,11 @@ export const useMitmStore = create<MitmState>()((set, get) => ({
   sudoPassword: "",
 
   fetch: async () => {
-    set({ loading: true, error: null });
+    // Only show loading spinner on initial fetch, not on polls
+    if (!get().status) set({ loading: true, error: null });
     try {
       const status = await apiFetch<MitmStatus>("/api/mitm");
-      set({ status, loading: false });
+      set({ status, loading: false, error: null });
     } catch (err) {
       set({
         error:

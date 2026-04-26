@@ -127,7 +127,7 @@ export default function MitmPage() {
   /* ---- initial fetch + polling ---- */
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 5000);
+    const interval = setInterval(fetchStatus, 10000);
     return () => clearInterval(interval);
   }, [fetchStatus]);
 
