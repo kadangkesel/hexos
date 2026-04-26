@@ -104,6 +104,13 @@ function formatLatency(ms: unknown): string {
   return `${(num / 1000).toFixed(2)}s`;
 }
 
+function formatCost(cost: number | undefined | null): string {
+  if (cost == null) return "—";
+  const num = Number(cost);
+  if (isNaN(num)) return "—";
+  return `$${num.toFixed(4)}`;
+}
+
 function getProviderFromModel(model: string): string {
   if (model.startsWith("cb/")) return "CodeBuddy";
   if (model.startsWith("cl/")) return "Cline";
@@ -297,6 +304,13 @@ function LogDetailDialog({
                 value={totalTokens}
                 highlight
               />
+            </div>
+            {/* Cost */}
+            <div className="mt-3 flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Cost</span>
+              <span className="text-sm font-mono font-semibold text-emerald-400">
+                {r.cost != null ? formatCost(r.cost) : "—"}
+              </span>
             </div>
             {/* Token ratio bar */}
             {totalTokens > 0 && (
@@ -627,6 +641,7 @@ export default function LogsPage() {
                     <TableHead className="text-right">Prompt</TableHead>
                     <TableHead className="text-right">Completion</TableHead>
                     <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right">Cost</TableHead>
                     <TableHead className="text-right">Latency</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
@@ -671,6 +686,9 @@ export default function LogsPage() {
                         </TableCell>
                         <TableCell className="text-right font-mono text-xs">
                           {formatTokens(r.totalTokens)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs text-emerald-400">
+                          {formatCost(r.cost)}
                         </TableCell>
                         <TableCell className="text-right font-mono text-xs">
                           {r.latencyMs != null
