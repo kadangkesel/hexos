@@ -1,7 +1,6 @@
 import { exec, spawn, execSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { TOOL_HOSTS } from "../config.ts";
 
 const IS_WIN = process.platform === "win32";
@@ -9,89 +8,6 @@ const IS_MAC = process.platform === "darwin";
 const HOSTS_FILE = IS_WIN
   ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "drivers", "etc", "hosts")
   : "/etc/hosts";
-
-/** Check if current process is running as admin (Windows) */
-function isRunningAsAdmin(): boolean {
-  if (!IS_WIN) return false;
-  try {
-    // Try writing to a protected location — if it works, we're admin
-    execSync("net session >nul 2>&1", { windowsHide: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Run a PowerShell command with admin elevation on Windows.
- * If already admin, runs directly via temp .ps1 file.
- * Otherwise uses UAC elevation.
- */
-function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
-  const ts = Date.now();
-  const tmpDir = os.tmpdir();
-  const scriptPath = path.join(tmpDir, `hexos_dns_${ts}.ps1`);
-
-  // Always write to .ps1 file to avoid CMD pipe/quote interpretation issues
-  fs.writeFileSync(scriptPath, command, "utf8");
-
-  if (isRunningAsAdmin()) {
-    // Already admin — run .ps1 directly, no UAC needed
-    try {
-      execSync(`powershell -NoProfile -ExecutionPolicy handle -File "${scriptPath}"`, {
-        windowsHide: true, timeout: timeoutMs,
-      });
-    } finally {
-      try { fs.unlinkSync(scriptPath); } catch {}
-    }
-    return;
-  }
-
-  // Not admin — use UAC elevation via Start-Process
-  const flagPath = path.join(tmpDir, `hexos_dns_${ts}.flag`);
-  const errPath = path.join(tmpDir, `hexos_dns_${ts}.err`);
-
-  const script = [
-    `try {`,
-    `  ${command}`,
-    `  Set-Content -Path '${flagPath.replace(/'/g, "''")}' -Value 'ok'`,
-    `} catch {`,
-    `  Set-Content -Path '${errPath.replace(/'/g, "''")}' -Value $_.Exception.Message`,
-    `}`,
-  ].join("\r\n");
-  fs.writeFileSync(scriptPath, script, "utf8");
-
-  try {
-    execSync(
-      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${scriptPath.replace(/'/g, "''")}' -Verb RunAs -Wait"`,
-      { timeout: timeoutMs, windowsHide: false },
-    );
-  } catch (e: any) {
-    // Log the actual error for debugging
-    console.error(`[MITM] Elevated command failed: ${e.message}`);
-  }
-
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(flagPath)) {
-      try { fs.unlinkSync(flagPath); } catch {}
-      try { fs.unlinkSync(scriptPath); } catch {}
-      return;
-    }
-    if (fs.existsSync(errPath)) {
-      const errMsg = fs.readFileSync(errPath, "utf8").trim();
-      console.error(`[MITM] Elevated script error: ${errMsg}`);
-      try { fs.unlinkSync(errPath); } catch {}
-      try { fs.unlinkSync(scriptPath); } catch {}
-      throw new Error(errMsg || "Elevated command failed");
-    }
-    const start = Date.now();
-    while (Date.now() - start < 100) { /* spin */ }
-  }
-  // Don't delete script on timeout — leave for debugging
-  console.error(`[MITM] Elevated command timed out. Script at: ${scriptPath}`);
-  throw new Error("Admin elevation timed out or was cancelled");
-}
 
 export function isSudoAvailable(): boolean {
   if (IS_WIN) return false;
@@ -166,23 +82,23 @@ export async function addDNSEntry(tool: string, sudoPassword: string | null): Pr
     console.log(`🌐 DNS ${tool}: already active`);
     return;
   }
-  const entries = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\n");
   try {
     if (IS_WIN) {
-      // Windows: use elevated PowerShell to append each entry to hosts file
-      const hostsEsc = HOSTS_FILE.replace(/'/g, "''");
-      const cmds = entriesToAdd.map((h) => `Add-Content -Path '${hostsEsc}' -Value '127.0.0.1 ${h}' -Encoding UTF8`);
-      cmds.push("ipconfig /flushdns | Out-Null");
-      runElevatedWindows(cmds.join("; "));
+      // Windows: direct file write (requires admin). Append each host entry.
+      const toAppend = "\r\n" + entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\r\n") + "\r\n";
+      fs.appendFileSync(HOSTS_FILE, toAppend, "utf8");
+      try { execSync("ipconfig /flushdns", { windowsHide: true, stdio: "pipe" }); } catch {}
     } else {
+      const entries = entriesToAdd.map((h) => `127.0.0.1 ${h}`).join("\n");
       await execWithPassword(`echo "${entries}" >> ${HOSTS_FILE}`, sudoPassword);
       await flushDNS(sudoPassword);
     }
     console.log(`🌐 DNS ${tool}: ✅ added ${entriesToAdd.join(", ")}`);
   } catch (error: any) {
-    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password"
-      : IS_WIN && error.message?.includes("canceled") ? "Admin elevation was cancelled"
-      : "Failed to add DNS entry";
+    if (IS_WIN && (error.code === "EPERM" || error.code === "EACCES")) {
+      throw new Error("Permission denied — run Hexos as Administrator to manage DNS");
+    }
+    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password" : "Failed to add DNS entry";
     throw new Error(msg);
   }
 }
@@ -197,12 +113,11 @@ export async function removeDNSEntry(tool: string, sudoPassword: string | null):
   }
   try {
     if (IS_WIN) {
-      // Windows: use elevated PowerShell to remove entries from hosts file
-      const hostsEsc = HOSTS_FILE.replace(/'/g, "''");
-      // Build a simple filter: read file, exclude lines containing any of the hosts, write back
-      const conditions = entriesToRemove.map((h) => `$_ -notmatch '${h}'`).join(" -and ");
-      const cmd = `(Get-Content '${hostsEsc}') | Where-Object { ${conditions} } | Set-Content '${hostsEsc}' -Encoding UTF8; ipconfig /flushdns | Out-Null`;
-      runElevatedWindows(cmd);
+      // Windows: direct file read/filter/write (requires admin)
+      const content = fs.readFileSync(HOSTS_FILE, "utf8");
+      const filtered = content.split(/\r?\n/).filter((line) => !entriesToRemove.some((h) => line.includes(h))).join("\r\n");
+      fs.writeFileSync(HOSTS_FILE, filtered, "utf8");
+      try { execSync("ipconfig /flushdns", { windowsHide: true, stdio: "pipe" }); } catch {}
     } else {
       for (const host of entriesToRemove) {
         const sedCmd = IS_MAC
@@ -214,9 +129,10 @@ export async function removeDNSEntry(tool: string, sudoPassword: string | null):
     }
     console.log(`🌐 DNS ${tool}: ✅ removed ${entriesToRemove.join(", ")}`);
   } catch (error: any) {
-    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password"
-      : IS_WIN && error.message?.includes("canceled") ? "Admin elevation was cancelled"
-      : "Failed to remove DNS entry";
+    if (IS_WIN && (error.code === "EPERM" || error.code === "EACCES")) {
+      throw new Error("Permission denied — run Hexos as Administrator to manage DNS");
+    }
+    const msg = error.message?.includes("incorrect password") ? "Wrong sudo password" : "Failed to remove DNS entry";
     throw new Error(msg);
   }
 }
