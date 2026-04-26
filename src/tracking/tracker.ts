@@ -310,7 +310,14 @@ export function getRecords(filter?: {
     records = records.slice(0, filter.limit);
   }
 
-  return records;
+  // Backfill cost for records that predate the pricing feature
+  return records.map((r) => {
+    if (!r.cost || r.cost === 0) {
+      const cost = calculateCost(r.model, r.promptTokens, r.completionTokens);
+      if (cost > 0) return { ...r, cost };
+    }
+    return r;
+  });
 }
 
 /**
@@ -339,7 +346,8 @@ export function getStats(since?: number): UsageStats {
   let successCount = 0;
 
   for (const r of records) {
-    const cost = r.cost ?? 0;
+    // Recalculate cost for records that predate the pricing feature
+    const cost = (r.cost && r.cost > 0) ? r.cost : calculateCost(r.model, r.promptTokens, r.completionTokens);
     stats.totalPromptTokens += r.promptTokens;
     stats.totalCompletionTokens += r.completionTokens;
     stats.totalTokens += r.totalTokens;

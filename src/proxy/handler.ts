@@ -12,7 +12,7 @@ import { refreshCodebuddy, refreshCline, refreshKiro, refreshQoder } from "../au
 import { PROVIDERS } from "../config/providers.ts";
 import { resolveModel, getUpstreamModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
-import { augmentMessages } from "../utils/transform.ts";
+import { augmentMessages, applyRulesDeep } from "../utils/transform.ts";
 import { openaiToKiro } from "./kiro-transform.ts";
 import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
 import { buildQoderRequest, buildInferenceUrl, type QoderUserInfo } from "./qoder-auth.ts";
@@ -176,7 +176,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       if (!qoderBody.max_output_tokens) qoderBody.max_output_tokens = 16384;
 
       const bodyJson = JSON.stringify(qoderBody);
-      debugScanBody(bodyJson, resolvedModel);
+      debugScanBody(bodyJson, resolvedModel, providerConfig.id);
 
       // Build Qoder request with auth
       requestUrl = buildInferenceUrl();
@@ -194,12 +194,12 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       const profileArn = conn.uid || "";
       const kiroBody = openaiToKiro(body, model, profileArn);
       requestBody = JSON.stringify(kiroBody);
-      debugScanBody(requestBody, resolvedModel);
+      debugScanBody(requestBody, resolvedModel, providerConfig.id);
       requestHeaders = buildHeaders(conn, providerConfig);
     } else if (isCodex) {
       // Codex: transform to Responses API format
       requestBody = JSON.stringify(buildCodexRequestBody(body, model));
-      debugScanBody(requestBody, resolvedModel);
+      debugScanBody(requestBody, resolvedModel, providerConfig.id);
       // Proactive token refresh if JWT is near expiry
       if (isCodexTokenExpired(conn.accessToken)) {
         log.info(`[${connLabel}] Codex token near expiry, refreshing proactively...`);
@@ -217,7 +217,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       requestHeaders = buildHeaders(conn, providerConfig);
     } else {
       requestBody = finalBodyStr!;
-      debugScanBody(requestBody, resolvedModel);
+      debugScanBody(requestBody, resolvedModel, providerConfig.id);
       requestHeaders = buildHeaders(conn, providerConfig);
     }
 
@@ -273,15 +273,15 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
               await incrementUsage(conn.id);
               refreshCreditAfterUse(conn).catch(() => {});
               if (isKiro) {
-                return await handleKiroResponse(retryRes, resolvedModel, conn, startTime, stream);
+                return await handleKiroResponse(retryRes, resolvedModel, conn, startTime, stream, modelId);
               }
               if (isQoder) {
-                return await handleQoderResponse(retryRes, resolvedModel, conn, startTime, stream);
+                return await handleQoderResponse(retryRes, resolvedModel, conn, startTime, stream, modelId);
               }
               if (isCodex) {
-                return await handleCodexResponse(retryRes, resolvedModel, conn, startTime);
+                return await handleCodexResponse(retryRes, resolvedModel, conn, startTime, modelId);
               }
-              return addTrackingHeaders(retryRes, resolvedModel, conn, startTime);
+              return addTrackingHeaders(retryRes, resolvedModel, conn, startTime, modelId);
             }
 
             // Refresh succeeded but request still failed
@@ -360,20 +360,20 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
 
       // Kiro: convert EventStream binary → OpenAI SSE/JSON
       if (isKiro && res.ok) {
-        return await handleKiroResponse(res, resolvedModel, conn, startTime, stream);
+        return await handleKiroResponse(res, resolvedModel, conn, startTime, stream, modelId);
       }
 
       // Qoder: convert wrapped SSE → OpenAI SSE/JSON
       if (isQoder && res.ok) {
-        return await handleQoderResponse(res, resolvedModel, conn, startTime, stream);
+        return await handleQoderResponse(res, resolvedModel, conn, startTime, stream, modelId);
       }
 
       // Codex: convert Responses API SSE → OpenAI Chat Completions SSE
       if (isCodex && res.ok) {
-        return await handleCodexResponse(res, resolvedModel, conn, startTime);
+        return await handleCodexResponse(res, resolvedModel, conn, startTime, modelId);
       }
 
-      return addTrackingHeaders(res, resolvedModel, conn, startTime);
+      return addTrackingHeaders(res, resolvedModel, conn, startTime, modelId);
     } catch (e: any) {
       log.error(`[${connLabel}] Network error: ${e.message}`);
       await recordFailure(conn.id);
@@ -519,9 +519,9 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
     if (tool_choice) upstreamBody.tool_choice = tool_choice;
   }
 
-  const sanitizedBody = upstreamBody as any;
+  const sanitizedBody = (provider === "codebuddy" ? applyRulesDeep(upstreamBody) : upstreamBody) as any;
   sanitizedBody.model = model;
-  // Tools are preserved as-is (no deep transformation needed)
+  // Restore tools after applyRulesDeep (don't mangle tool schemas)
   if (upstreamBody.tools) sanitizedBody.tools = upstreamBody.tools;
 
   return { finalBodyStr: JSON.stringify(sanitizedBody), model };
@@ -536,6 +536,7 @@ async function handleKiroResponse(
   conn: Connection,
   startTime: number,
   stream: boolean,
+  hexosModelId?: string,
 ): Promise<Response> {
   if (stream) {
     const { response, usagePromise } = kiroToOpenAIStream(res, model);
@@ -545,13 +546,13 @@ async function handleKiroResponse(
       const connLabel = conn.label || conn.id.slice(0, 8);
       log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
     }).catch(() => {});
-    return addTrackingHeaders(response, model, conn, startTime);
+    return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
   } else {
     const { response, promptTokens, completionTokens } = await kiroToOpenAINonStream(res, model);
     const elapsed = Date.now() - startTime;
     const connLabel = conn.label || conn.id.slice(0, 8);
     log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
-    return addTrackingHeaders(response, model, conn, startTime);
+    return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
   }
 }
 
@@ -564,6 +565,7 @@ async function handleQoderResponse(
   conn: Connection,
   startTime: number,
   stream: boolean,
+  hexosModelId?: string,
 ): Promise<Response> {
   if (stream) {
     const { response, usagePromise } = qoderToOpenAIStream(res, model);
@@ -572,13 +574,13 @@ async function handleQoderResponse(
       const connLabel = conn.label || conn.id.slice(0, 8);
       log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
     }).catch(() => {});
-    return addTrackingHeaders(response, model, conn, startTime);
+    return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
   } else {
     const { response, promptTokens, completionTokens } = await qoderToOpenAINonStream(res, model);
     const elapsed = Date.now() - startTime;
     const connLabel = conn.label || conn.id.slice(0, 8);
     log.info(`📊 ${model} | ${connLabel} | prompt: ${promptTokens} | completion: ${completionTokens} | total: ${promptTokens + completionTokens} | ${elapsed}ms`);
-    return addTrackingHeaders(response, model, conn, startTime);
+    return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
   }
 }
 
@@ -591,6 +593,7 @@ async function handleCodexResponse(
   model: string,
   conn: Connection,
   startTime: number,
+  hexosModelId?: string,
 ): Promise<Response> {
   // Extract rate limits from response headers and update connection credit info
   const rateLimits = extractCodexRateLimits(res.headers);
@@ -616,7 +619,7 @@ async function handleCodexResponse(
   } as any);
 
   if (!res.body) {
-    return addTrackingHeaders(res, model, conn, startTime);
+    return addTrackingHeaders(res, model, conn, startTime, hexosModelId);
   }
 
   // Pipe through SSE transformer: Responses API → Chat Completions format
@@ -632,7 +635,7 @@ async function handleCodexResponse(
     },
   });
 
-  return addTrackingHeaders(response, model, conn, startTime);
+  return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
 }
 
 /**
@@ -710,8 +713,10 @@ function buildHeaders(conn: Connection, providerConfig: any): Record<string, str
 /**
  * Debug: save request body and scan for remaining sensitive words.
  */
-function debugScanBody(finalBodyStr: string, model: string) {
+function debugScanBody(finalBodyStr: string, model: string, providerId?: string) {
   try {
+    // Only scan for sensitive words on Service provider requests
+    if (providerId && providerId !== "Service") return;
     const fs = require("fs");
     const debugDir = process.cwd();
     fs.writeFileSync(`${debugDir}/hexos-last-request.json`, finalBodyStr);
@@ -747,9 +752,9 @@ function debugScanBody(finalBodyStr: string, model: string) {
  * Add tracking metadata headers to the response.
  * These are used by server.ts to record usage after streaming completes.
  */
-function addTrackingHeaders(res: Response, model: string, conn: Connection, startTime: number): Response {
+function addTrackingHeaders(res: Response, model: string, conn: Connection, startTime: number, hexosModelId?: string): Response {
   const newHeaders = new Headers(res.headers);
-  newHeaders.set("X-Hexos-Model", model);
+  newHeaders.set("X-Hexos-Model", hexosModelId || model);
   newHeaders.set("X-Hexos-Account-Id", conn.id);
   newHeaders.set("X-Hexos-Account-Label", conn.label || conn.id.slice(0, 8));
   newHeaders.set("X-Hexos-Start-Time", String(startTime));

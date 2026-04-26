@@ -18,7 +18,7 @@ import { join, extname, dirname } from "path";
 import { homedir } from "os";
 import { existsSync, readFileSync } from "fs";
 import { fileURLToPath } from "url";
-import { initPricing, getModelPricing, getPricingStats, refreshPricing } from "./config/pricing.ts";
+import { initPricing, getModelPricing, getPricingStats, refreshPricing, calculateCost } from "./config/pricing.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1583,7 +1583,7 @@ export function createApp() {
         buckets[bucketIdx].tokens += rec.totalTokens;
         buckets[bucketIdx].promptTokens += rec.promptTokens;
         buckets[bucketIdx].completionTokens += rec.completionTokens;
-        buckets[bucketIdx].cost += rec.cost ?? 0;
+        buckets[bucketIdx].cost += (rec.cost && rec.cost > 0) ? rec.cost : calculateCost(rec.model, rec.promptTokens, rec.completionTokens);
         if (rec.success) buckets[bucketIdx].successCount++;
         else buckets[bucketIdx].failCount++;
       }

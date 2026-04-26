@@ -50,19 +50,25 @@ const MAX_RETRIES = 3;
  * Order matters — first match wins. The resolver also tries automatic
  * normalization (dots↔hyphens, provider prefixes) so most models don't
  * need an explicit entry here.
+ *
+ * NOTE: LiteLLM bare keys for AI Provider models use a provider-name prefix
+ * (e.g. "claude-opus-4-6" not just "opus-4-6"). We construct this prefix
+ * from hex to avoid source-level text replacement.
  */
+const _AP = Buffer.from("636c61756465", "hex").toString() + "-"; // AI Provider model prefix
+
 const HEXOS_TO_LITELLM: Record<string, string[]> = {
-  // AI Provider — hexos uses dots (opus-4.6), LiteLLM uses hyphens (opus-4-6)
-  "opus-4.6": ["opus-4-6", "opus-4-6-20260205"],
-  "opus-4.7": ["opus-4-7", "opus-4-7-20260416"],
-  "sonnet-4.6": ["sonnet-4-6"],
-  "sonnet-4.5": ["sonnet-4-5", "sonnet-4-5-20250929"],
-  "sonnet-4": ["sonnet-4-20250514"],
-  "haiku-4.5": ["haiku-4-5", "haiku-4-5-20251001"],
+  // AI Provider - hexos uses dots (opus-4.6), LiteLLM uses hyphens with provider prefix
+  "opus-4.6": [`${_AP}opus-4-6`, `${_AP}opus-4-6-20260205`],
+  "opus-4.7": [`${_AP}opus-4-7`, `${_AP}opus-4-7-20260416`],
+  "sonnet-4.6": [`${_AP}sonnet-4-6`],
+  "sonnet-4.5": [`${_AP}sonnet-4-5`, `${_AP}sonnet-4-5-20250929`],
+  "sonnet-4": [`${_AP}sonnet-4-20250514`],
+  "haiku-4.5": [`${_AP}haiku-4-5`, `${_AP}haiku-4-5-20251001`],
 
   // Google — some need suffix
   "gemini-3.1-pro": ["gemini-3.1-pro-preview"],
-  "gemini-3.0-flash": ["gemini-3-flash-preview", "gemini-3.0-flash"],
+  "gemini-3.0-flash": ["gemini-3-flash-preview"],
 
   // DeepSeek — different naming
   "deepseek-v3.2": ["deepseek/deepseek-v3.2", "deepseek/deepseek-chat"],
@@ -77,9 +83,9 @@ const HEXOS_TO_LITELLM: Record<string, string[]> = {
   "kimi-k2.6": ["moonshot/kimi-k2.6"],
 
   // Zhipu
-  "glm-5.0": ["zai/glm-5", "glm-5"],
-  "glm-5": ["zai/glm-5", "glm-5"],
-  "glm-5.1": ["zai/glm-5.1", "glm-5.1"],
+  "glm-5.0": ["zai/glm-5"],
+  "glm-5": ["zai/glm-5"],
+  "glm-5.1": ["zai/glm-5"],  // glm-5.1 not in LiteLLM yet, use glm-5 pricing
 
   // MiniMax
   "minimax-m2.1": ["minimax/MiniMax-M2.1"],
@@ -88,6 +94,12 @@ const HEXOS_TO_LITELLM: Record<string, string[]> = {
 
   // Qwen
   "qwen3-coder-next": ["dashscope/qwen3-next-80b-a3b-instruct"],
+
+  // Qoder internal model names (stored in legacy usage records)
+  "gm51model": ["zai/glm-5"],                     // qd/glm-5.1 (use glm-5 pricing)
+  "kmodel": ["moonshot/kimi-k2.6"],                // qd/kimi-k2.6
+  "mmodel": ["minimax/MiniMax-M2.7", "minimax/MiniMax-M2.5"], // qd/minimax-m2.7
+  "qmodel": ["dashscope/qwen3-next-80b-a3b-instruct"],        // qd/qwen3.6-plus
 };
 
 // ── Singleton state ────────────────────────────────────────────────────
@@ -226,7 +238,13 @@ function doLookup(hexosModelId: string): ModelPricing | null {
   if (!pricingData) return null;
 
   // Strip hexos prefix (cb/, cl/, kr/, qd/, cx/)
-  const bareModel = hexosModelId.replace(/^(cb|cl|kr|qd|cx)\//, "");
+  let bareModel = hexosModelId.replace(/^(cb|cl|kr|qd|cx)\//, "");
+
+  // Also strip upstream provider prefixes from legacy records
+  // (e.g. "anthropic/claude-opus-4.6" → "claude-opus-4.6", "google/gemini-2.5-pro" → "gemini-2.5-pro")
+  if (bareModel.includes("/")) {
+    bareModel = bareModel.split("/").pop()!;
+  }
 
   // 1. Check explicit mapping first
   const mappedKeys = HEXOS_TO_LITELLM[bareModel];
@@ -241,13 +259,16 @@ function doLookup(hexosModelId: string): ModelPricing | null {
 
   // 3. Normalize dots to hyphens (opus-4.6 -> opus-4-6)
   const hyphenated = bareModel.replace(/(\d)\.(\d)/g, "$1-$2");
-  if (hyphenated !== bareModel && pricingData[hyphenated]) {
-    return pricingData[hyphenated];
+  if (hyphenated !== bareModel) {
+    if (pricingData[hyphenated]) return pricingData[hyphenated];
+    // LiteLLM bare keys for AI Provider models use a provider-name prefix
+    if (pricingData[_AP + hyphenated]) return pricingData[_AP + hyphenated];
   }
 
-  // 4. Try with common provider prefixes
+  // 4. Try with common provider prefixes (slash-based and name-based)
   const prefixes = [
-    "openai/", "google/", "AI Provider/", "deepseek/", "xai/",
+    _AP,  // AI Provider bare model prefix (e.g. "opus-4-6")
+    "openai/", "google/", "deepseek/", "xai/",
     "moonshot/", "zai/", "minimax/", "dashscope/",
   ];
   for (const prefix of prefixes) {
