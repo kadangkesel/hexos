@@ -282,6 +282,9 @@ export async function startServer(
     batLines.push(`set ROUTER_API_KEY=${apiKey}`);
     batLines.push(`set MITM_ROUTER_BASE=${mitmRouterBase}`);
     batLines.push(`set HOME=${os.homedir()}`);
+    batLines.push(`set USERPROFILE=${os.homedir()}`);
+    batLines.push(`set HOMEDRIVE=${os.homedir().split("\\")[0]}`);
+    batLines.push(`set HOMEPATH=\\${os.homedir().split("\\").slice(1).join("\\")}`);
     batLines.push(`"${bunPath}" run "${SERVER_PATH}"`);
 
     fs.writeFileSync(batPath, batLines.join("\r\n"), "utf8");

@@ -111,16 +111,23 @@ function extractModel(url: string, body: Buffer): string | null {
 function getMappedModel(tool: string, model: string | null): string | null {
   if (!model) return null;
   try {
-    if (!fs.existsSync(DB_FILE)) return null;
+    if (!fs.existsSync(DB_FILE)) {
+      log(`⚠️ db.json not found at ${DB_FILE}`);
+      return null;
+    }
     const db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
     const aliases = db.mitmAlias?.[tool];
-    if (!aliases) return null;
+    if (!aliases) {
+      log(`⚠️ No aliases for tool "${tool}" in db.json`);
+      return null;
+    }
     if (aliases[model]) return aliases[model];
     const prefixKey = Object.keys(aliases).find(
       (k) => k && aliases[k] && (model.startsWith(k) || k.startsWith(model)),
     );
     return prefixKey ? aliases[prefixKey] : null;
-  } catch {
+  } catch (e: any) {
+    log(`⚠️ getMappedModel error: ${e.message}`);
     return null;
   }
 }
