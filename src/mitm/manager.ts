@@ -244,24 +244,50 @@ export async function startServer(
   const bunPath = process.execPath || "bun";
 
   if (IS_WIN) {
-    // Windows: port 443 needs admin — spawn elevated via a wrapper script
-    const wrapperPath = path.join(MITM_DIR, "_mitm_start.ps1");
-    const wrapperContent = [
+    // Windows: port 443 needs admin — write a launcher script, elevate it, fire-and-forget
+    if (!fs.existsSync(MITM_DIR)) fs.mkdirSync(MITM_DIR, { recursive: true });
+
+    // 1. Write the actual MITM server runner script
+    const runnerPath = path.join(MITM_DIR, "_mitm_run.ps1");
+    const pidFileSafe = PID_FILE.replace(/\\/g, "\\\\").replace(/'/g, "''");
+    fs.writeFileSync(runnerPath, [
+      `$ErrorActionPreference = 'Stop'`,
       `$env:ROUTER_API_KEY = '${apiKey.replace(/'/g, "''")}'`,
       `$env:MITM_ROUTER_BASE = '${mitmRouterBase.replace(/'/g, "''")}'`,
       `$env:HOME = '${os.homedir().replace(/'/g, "''")}'`,
-      `& '${bunPath.replace(/'/g, "''")}' run '${SERVER_PATH.replace(/'/g, "''")}'`,
-    ].join("\r\n");
-    fs.writeFileSync(wrapperPath, wrapperContent, "utf8");
+      `# Write our PID so hexos can track us`,
+      `Set-Content -Path '${pidFileSafe}' -Value $PID -Encoding UTF8`,
+      `# Run the MITM server (blocks until server exits)`,
+      `& '${bunPath.replace(/'/g, "''").replace(/\\/g, "\\\\")}' run '${SERVER_PATH.replace(/'/g, "''").replace(/\\/g, "\\\\")}'`,
+    ].join("\r\n"), "utf8");
 
-    // Spawn elevated PowerShell that runs the wrapper — NOT hidden so it stays alive
-    serverProcess = spawn(
-      "powershell",
-      ["-NoProfile", "-Command",
-        `Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${wrapperPath.replace(/'/g, "''")}' -Verb RunAs -PassThru | ForEach-Object { $_.Id } | Set-Content '${PID_FILE.replace(/'/g, "''")}'`],
-      { detached: true, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    serverProcess.unref();
+    // 2. Launch elevated — do NOT use -Wait (that blocks forever)
+    try {
+      execSync(
+        `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${runnerPath.replace(/'/g, "''")}' -Verb RunAs"`,
+        { windowsHide: false, timeout: 15000 },
+      );
+    } catch {
+      // User may have cancelled UAC
+      throw new Error("MITM server start cancelled — admin elevation required on Windows");
+    }
+
+    // 3. Don't track serverProcess on Windows — it's a separate elevated process
+    serverProcess = null;
+    mitmLastStartTime = Date.now();
+
+    // Wait for PID file to appear (written by the runner script)
+    const pidDeadline = Date.now() + 5000;
+    while (Date.now() < pidDeadline) {
+      try {
+        if (fs.existsSync(PID_FILE)) {
+          const raw = fs.readFileSync(PID_FILE, "utf-8").trim();
+          const pid = parseInt(raw, 10);
+          if (pid > 0) { serverPid = pid; break; }
+        }
+      } catch { /* ignore */ }
+      await new Promise((r) => setTimeout(r, 300));
+    }
   } else if (isSudoAvailable()) {
     const inlineCmd = [
       `HOME=${shellQuoteSingle(os.homedir())}`,
@@ -293,21 +319,7 @@ export async function startServer(
     });
   }
 
-  if (IS_WIN) {
-    // Windows: elevated process is detached, we track via PID file + health check
-    if (!fs.existsSync(MITM_DIR)) fs.mkdirSync(MITM_DIR, { recursive: true });
-    mitmLastStartTime = Date.now();
-    // The launcher writes PID to PID_FILE, wait a moment for it
-    await new Promise((r) => setTimeout(r, 2000));
-    // Read PID from file (written by the launcher PowerShell)
-    try {
-      if (fs.existsSync(PID_FILE)) {
-        serverPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10) || null;
-      }
-    } catch { /* ignore */ }
-    // Detach — we don't track the launcher process
-    serverProcess = null;
-  } else if (serverProcess) {
+  if (serverProcess) {
     serverPid = serverProcess.pid || null;
     if (!fs.existsSync(MITM_DIR)) fs.mkdirSync(MITM_DIR, { recursive: true });
     if (serverPid) fs.writeFileSync(PID_FILE, String(serverPid));
@@ -370,9 +382,21 @@ export async function stopServer(sudoPassword: string | null): Promise<{ running
 
   if (pidToKill && isProcessAlive(pidToKill)) {
     console.log(`Killing MITM server (PID: ${pidToKill})...`);
-    killProcess(pidToKill, false, sudoPassword);
-    await new Promise((r) => setTimeout(r, 1000));
-    if (isProcessAlive(pidToKill)) killProcess(pidToKill, true, sudoPassword);
+    if (IS_WIN) {
+      // Windows: elevated process needs elevated kill
+      try {
+        execSync(`powershell -NoProfile -Command "Start-Process taskkill -ArgumentList '/F','/PID','${pidToKill}','/T' -Verb RunAs -Wait -WindowStyle Hidden"`, {
+          windowsHide: true, timeout: 10000,
+        });
+      } catch {
+        // Fallback: try direct kill (works if hexos is already admin)
+        try { execSync(`taskkill /F /PID ${pidToKill} /T`, { windowsHide: true }); } catch { /* ignore */ }
+      }
+    } else {
+      killProcess(pidToKill, false, sudoPassword);
+      await new Promise((r) => setTimeout(r, 1000));
+      if (isProcessAlive(pidToKill)) killProcess(pidToKill, true, sudoPassword);
+    }
   }
   serverProcess = null;
   serverPid = null;
