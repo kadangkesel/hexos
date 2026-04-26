@@ -61,6 +61,8 @@ interface ToolMeta {
   icon: LucideIcon;
   hosts: string[];
   comingSoon?: boolean;
+  /** Example source model names this IDE typically sends */
+  exampleModels?: string[];
 }
 
 const TOOLS: ToolMeta[] = [
@@ -69,18 +71,21 @@ const TOOLS: ToolMeta[] = [
     name: "GitHub Copilot",
     icon: GitFork,
     hosts: ["api.individual.githubcopilot.com"],
+    exampleModels: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "o4-mini", "claude-sonnet-4"],
   },
   {
     id: "antigravity",
     name: "Antigravity",
     icon: Cloud,
     hosts: ["cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"],
+    exampleModels: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
   },
   {
     id: "kiro",
     name: "Kiro",
     icon: Cpu,
     hosts: ["q.us-east-1.amazonaws.com", "codewhisperer.us-east-1.amazonaws.com"],
+    exampleModels: ["claude-sonnet-4-20250514"],
   },
   {
     id: "cursor",
@@ -413,6 +418,15 @@ export default function MitmPage() {
                                 }
                               />
                             </div>
+                            {tool.exampleModels && (
+                              <p className="mt-1.5 text-[10px] text-muted-foreground">
+                                Models: {tool.exampleModels.map((m, i) => (
+                                  <code key={m} className="rounded bg-muted px-1 py-0.5">
+                                    {m}
+                                  </code>
+                                )).reduce((prev: any, curr: any, i: number) => i === 0 ? [curr] : [...prev, ", ", curr], [] as any[])}
+                              </p>
+                            )}
                           </div>
                         </CardContent>
                       </Card>
@@ -468,7 +482,10 @@ export default function MitmPage() {
                     <Input
                       id="alias-source"
                       className="font-mono text-sm"
-                      placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
+                      placeholder={(() => {
+                        const t = TOOLS.find((x) => x.id === aliasTool);
+                        return t?.exampleModels ? `e.g. ${t.exampleModels.slice(0, 2).join(", ")}` : "e.g. gpt-4o";
+                      })()}
                       value={aliasSource}
                       onChange={(e) => setAliasSource(e.target.value)}
                       onKeyDown={(e) => {
