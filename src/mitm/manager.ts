@@ -194,6 +194,7 @@ export async function getMitmStatus(): Promise<{
 export async function startServer(
   apiKey: string,
   sudoPassword: string | null,
+  tools: string[] = [],
 ): Promise<{ running: boolean; pid: number | null }> {
   if (!serverProcess || serverProcess.killed) {
     try {
@@ -357,9 +358,23 @@ export async function startServer(
 
   console.log(`✅ MITM server healthy (PID: ${serverPid || health.pid})`);
 
-  const dnsStatus = checkAllDNSStatus();
-  for (const [tool, active] of Object.entries(dnsStatus)) {
-    console.log(`🌐 DNS ${tool}: ${active ? "✅ active" : "❌ inactive"}`);
+  // Step 5: Enable DNS for selected tools
+  const password = sudoPassword || getCachedPassword();
+  if (tools.length > 0) {
+    for (const tool of tools) {
+      try {
+        await addDNSEntry(tool, password);
+        console.log(`🌐 DNS ${tool}: ✅ enabled`);
+      } catch (e: any) {
+        console.error(`🌐 DNS ${tool}: ❌ failed — ${e.message}`);
+      }
+    }
+  } else {
+    // No tools selected — just log current DNS status
+    const dnsStatus = checkAllDNSStatus();
+    for (const [tool, active] of Object.entries(dnsStatus)) {
+      console.log(`🌐 DNS ${tool}: ${active ? "✅ active" : "❌ inactive"}`);
+    }
   }
 
   if (sudoPassword) setCachedPassword(sudoPassword);

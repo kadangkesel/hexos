@@ -113,11 +113,11 @@ export default function MitmPage() {
     loading,
     error,
     sudoPassword,
+    selectedTools,
     fetch: fetchStatus,
     start,
     stop,
-    enableTool,
-    disableTool,
+    toggleTool,
     setAlias,
     removeAlias,
     setSudoPassword,
@@ -159,20 +159,8 @@ export default function MitmPage() {
     setActionLoading(null);
   };
 
-  const handleToggleTool = async (toolId: string, enabled: boolean) => {
-    setActionLoading(toolId);
-    try {
-      if (enabled) {
-        await enableTool(toolId);
-        toast.success(`${TOOLS.find((t) => t.id === toolId)?.name ?? toolId} enabled`);
-      } else {
-        await disableTool(toolId);
-        toast.success(`${TOOLS.find((t) => t.id === toolId)?.name ?? toolId} disabled`);
-      }
-    } catch {
-      toast.error(useMitmStore.getState().error ?? `Failed to toggle ${toolId}`);
-    }
-    setActionLoading(null);
+  const handleToggleTool = (toolId: string) => {
+    toggleTool(toolId);
   };
 
   const handleAddAlias = async () => {
@@ -317,7 +305,7 @@ export default function MitmPage() {
                   )}
                   {isWindows && !isRunning && (
                     <p className="text-muted-foreground text-xs">
-                      Windows: UAC admin prompt will appear when starting server or enabling DNS.
+                      Windows: UAC admin prompt will appear when starting the server.
                     </p>
                   )}
 
@@ -365,14 +353,14 @@ export default function MitmPage() {
                   <CardTitle>DNS Interception</CardTitle>
                 </div>
                 <CardDescription>
-                  Route IDE traffic through the MITM proxy via /etc/hosts
+                  Select which tools to intercept — DNS entries are applied when starting the proxy
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   {TOOLS.map((tool) => {
                     const Icon = tool.icon;
-                    const isEnabled = status?.dnsStatus?.[tool.id] ?? false;
+                    const isEnabled = selectedTools[tool.id] ?? false;
 
                     return (
                       <Card key={tool.id} className="relative">
@@ -408,12 +396,12 @@ export default function MitmPage() {
                               </div>
                               <Switch
                                 checked={isEnabled}
-                                onCheckedChange={(checked) =>
-                                  handleToggleTool(tool.id, checked)
+                                onCheckedChange={() =>
+                                  handleToggleTool(tool.id)
                                 }
                                 disabled={
                                   !!tool.comingSoon ||
-                                  actionLoading === tool.id
+                                  isRunning
                                 }
                               />
                             </div>
@@ -641,9 +629,10 @@ export default function MitmPage() {
                 <div className="flex flex-col gap-2 text-sm text-muted-foreground">
                   <p>
                     <strong className="text-foreground">1. DNS Redirect:</strong>{" "}
-                    When you enable a tool, its API hostnames are added to{" "}
+                    When you start the proxy, DNS entries for all selected tools are added to{" "}
                     <code className="rounded bg-muted px-1 py-0.5 text-xs">/etc/hosts</code>{" "}
                     pointing to <code className="rounded bg-muted px-1 py-0.5 text-xs">127.0.0.1</code>.
+                    Stopping the proxy removes all entries.
                   </p>
                   <p>
                     <strong className="text-foreground">2. TLS Interception:</strong>{" "}

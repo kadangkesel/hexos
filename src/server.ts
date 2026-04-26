@@ -1833,7 +1833,8 @@ export function createApp() {
       const body = await c.req.json().catch(() => ({}));
       const keys = getApiKeys();
       const apiKey = keys[0] || "";
-      const result = await startServer(apiKey, body.sudoPassword || null);
+      const tools: string[] = Array.isArray(body.tools) ? body.tools : [];
+      const result = await startServer(apiKey, body.sudoPassword || null, tools);
       return c.json(result);
     } catch (e: any) {
       return c.json({ error: e.message }, 500);

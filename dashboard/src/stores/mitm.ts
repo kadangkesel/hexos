@@ -19,12 +19,14 @@ export interface MitmState {
   loading: boolean;
   error: string | null;
   sudoPassword: string;
+  /** Local selection state — which tools to enable DNS for on start */
+  selectedTools: Record<string, boolean>;
 
   fetch: () => Promise<void>;
   start: () => Promise<boolean>;
   stop: () => Promise<boolean>;
-  enableTool: (tool: string) => Promise<boolean>;
-  disableTool: (tool: string) => Promise<boolean>;
+  /** Toggle local tool selection (no API call) */
+  toggleTool: (tool: string) => void;
   setAlias: (
     tool: string,
     sourceModel: string,
@@ -43,12 +45,23 @@ export const useMitmStore = create<MitmState>()((set, get) => ({
   loading: false,
   error: null,
   sudoPassword: "",
+  selectedTools: {},
 
   fetch: async () => {
     // Only show loading spinner on initial fetch, not on polls
-    if (!get().status) set({ loading: true, error: null });
+    const isInitial = !get().status;
+    if (isInitial) set({ loading: true, error: null });
     try {
       const status = await apiFetch<MitmStatus>("/api/mitm");
+      // On first fetch, sync selectedTools from server dnsStatus
+      // so CLI-enabled tools show as selected
+      if (isInitial && status.dnsStatus) {
+        const current = get().selectedTools;
+        const hasAny = Object.keys(current).length > 0;
+        if (!hasAny) {
+          set({ selectedTools: { ...status.dnsStatus } });
+        }
+      }
       set({ status, loading: false, error: null });
     } catch (err) {
       set({
@@ -61,11 +74,16 @@ export const useMitmStore = create<MitmState>()((set, get) => ({
 
   start: async () => {
     try {
+      const { selectedTools, sudoPassword } = get();
+      // Collect selected tool IDs
+      const tools = Object.entries(selectedTools)
+        .filter(([, v]) => v)
+        .map(([k]) => k);
       const result = await apiFetch<{ running: boolean; pid: number }>(
         "/api/mitm/start",
         {
           method: "POST",
-          body: JSON.stringify({ sudoPassword: get().sudoPassword }),
+          body: JSON.stringify({ sudoPassword, tools }),
         },
       );
       set((s) => ({
@@ -106,38 +124,13 @@ export const useMitmStore = create<MitmState>()((set, get) => ({
     }
   },
 
-  enableTool: async (tool) => {
-    try {
-      await apiFetch("/api/mitm/enable", {
-        method: "POST",
-        body: JSON.stringify({ tool, sudoPassword: get().sudoPassword }),
-      });
-      await get().fetch();
-      return true;
-    } catch (err) {
-      set({
-        error:
-          err instanceof Error ? err.message : `Failed to enable ${tool}`,
-      });
-      return false;
-    }
-  },
-
-  disableTool: async (tool) => {
-    try {
-      await apiFetch("/api/mitm/disable", {
-        method: "POST",
-        body: JSON.stringify({ tool, sudoPassword: get().sudoPassword }),
-      });
-      await get().fetch();
-      return true;
-    } catch (err) {
-      set({
-        error:
-          err instanceof Error ? err.message : `Failed to disable ${tool}`,
-      });
-      return false;
-    }
+  toggleTool: (tool) => {
+    set((s) => ({
+      selectedTools: {
+        ...s.selectedTools,
+        [tool]: !s.selectedTools[tool],
+      },
+    }));
   },
 
   setAlias: async (tool, sourceModel, targetModel) => {
