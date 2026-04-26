@@ -10,12 +10,34 @@ const HOSTS_FILE = IS_WIN
   ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "drivers", "etc", "hosts")
   : "/etc/hosts";
 
+/** Check if current process is running as admin (Windows) */
+function isRunningAsAdmin(): boolean {
+  if (!IS_WIN) return false;
+  try {
+    // Try writing to a protected location — if it works, we're admin
+    execSync("net session >nul 2>&1", { windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Run a command with admin elevation on Windows.
- * Writes a temp .ps1 script, launches it via Start-Process -Verb RunAs,
- * and polls a flag file to know when it's done.
+ * If already admin, runs directly. Otherwise uses UAC elevation.
  */
 function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
+  // If already running as admin, just execute directly
+  if (isRunningAsAdmin()) {
+    try {
+      execSync(`powershell -NoProfile -Command "${command}"`, { windowsHide: true, timeout: timeoutMs });
+      return;
+    } catch (e: any) {
+      throw new Error(e.message || "Command failed");
+    }
+  }
+
+  // Not admin — use UAC elevation via temp script
   const ts = Date.now();
   const tmpDir = os.tmpdir();
   const scriptPath = path.join(tmpDir, `hexos_dns_${ts}.ps1`);

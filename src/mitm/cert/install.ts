@@ -83,12 +83,30 @@ async function installCertMac(sudoPassword: string | null, certPath: string): Pr
 
 /**
  * Run a command with admin elevation on Windows.
- * Writes a temp .ps1 script, launches it via Start-Process -Verb RunAs,
- * and polls a flag file to know when it's done.
+ * If already admin, runs directly. Otherwise uses UAC elevation.
  */
 function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
   const os = require("os");
   const path = require("path");
+
+  // If already running as admin, just execute directly
+  try {
+    execSync("net session >nul 2>&1", { windowsHide: true });
+    // We're admin — run directly
+    execSync(`powershell -NoProfile -Command "${command}"`, { windowsHide: true, timeout: timeoutMs });
+    return;
+  } catch (e: any) {
+    // net session failed = not admin, OR powershell command failed
+    if (e.message?.includes("net session")) {
+      // Not admin — fall through to UAC elevation
+    } else if (!e.status || e.status === 1) {
+      // net session check itself failed — try direct anyway
+    } else {
+      throw new Error(e.message || "Command failed");
+    }
+  }
+
+  // Not admin — use UAC elevation via temp script
   const ts = Date.now();
   const tmpDir = os.tmpdir();
   const scriptPath = path.join(tmpDir, `hexos_mitm_${ts}.ps1`);
