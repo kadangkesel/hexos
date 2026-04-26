@@ -6,6 +6,7 @@ import { Search, Copy, Check, Loader2, Brain } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "motion/react";
 // utilities
+import { copyText } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -67,7 +68,7 @@ function ModelCard({ model, index }: { model: Model; index: number }) {
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(model.id);
+      await copyText(model.id);
       setCopied(true);
       toast.success(`Copied ${model.id}`);
       setTimeout(() => setCopied(false), 2000);

@@ -14,7 +14,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, copyText } from "@/lib/utils";
 import { CodeTabs } from "@/components/animate-ui/components/animate/code-tabs";
 
 /* ------------------------------------------------------------------ */
@@ -22,7 +22,7 @@ import { CodeTabs } from "@/components/animate-ui/components/animate/code-tabs";
 /* ------------------------------------------------------------------ */
 
 function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text).then(() => toast.success("Copied"));
+  copyText(text).then(() => toast.success("Copied")).catch(() => toast.error("Failed to copy"));
 }
 
 function CodeBlock({ code, label, lang }: { code: string; label?: string; lang?: string }) {

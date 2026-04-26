@@ -7,12 +7,10 @@ import { toast } from "sonner";
 import { motion } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { copyText } from "@/lib/utils";
 
 function copyToClipboard(text: string, label = "Copied to clipboard") {
-  navigator.clipboard
-    .writeText(text)
-    .then(() => toast.success(label))
-    .catch(() => toast.error("Failed to copy"));
+  copyText(text).then(() => toast.success(label)).catch(() => toast.error("Failed to copy"));
 }
 
 export default function ApiKeyPage() {

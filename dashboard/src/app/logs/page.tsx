@@ -24,7 +24,7 @@ import {
   FileJson,
   MessageSquare,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, copyText as copyToClipboard } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -160,11 +160,11 @@ function LogDetailDialog({
   const responseBody = (r as any).responseBody as string | undefined;
 
   const copyId = () => {
-    navigator.clipboard.writeText(r.id).then(() => toast.success("ID copied"));
+    copyToClipboard(r.id).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy"));
   };
 
-  const copyText = (text: string, label: string) => {
-    navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`));
+  const copyField = (text: string, label: string) => {
+    copyToClipboard(text).then(() => toast.success(`${label} copied`)).catch(() => toast.error("Failed to copy"));
   };
 
   // Try to pretty-print JSON
@@ -382,7 +382,7 @@ function LogDetailDialog({
                     Request Body
                   </h4>
                   <button
-                    onClick={() => copyText(requestBody, "Request")}
+                    onClick={() => copyField(requestBody!, "Request")}
                     className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
                   >
                     <Copy className="size-3" />
@@ -407,7 +407,7 @@ function LogDetailDialog({
                     Response
                   </h4>
                   <button
-                    onClick={() => copyText(responseBody, "Response")}
+                    onClick={() => copyField(responseBody!, "Response")}
                     className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
                   >
                     <Copy className="size-3" />

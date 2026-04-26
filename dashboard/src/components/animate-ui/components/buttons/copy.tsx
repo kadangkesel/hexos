@@ -10,7 +10,7 @@ import {
   Button as ButtonPrimitive,
   type ButtonProps as ButtonPrimitiveProps,
 } from '@/components/animate-ui/primitives/buttons/button';
-import { cn } from '@/lib/utils';
+import { cn, copyText } from '@/lib/utils';
 import { useControlledState } from '@/hooks/use-controlled-state';
 
 const buttonVariants = cva(
@@ -74,8 +74,7 @@ function CopyButton({
       onClick?.(e);
       if (copied) return;
       if (content) {
-        navigator.clipboard
-          .writeText(content)
+        copyText(content)
           .then(() => {
             setIsCopied(true);
             onCopiedChange?.(true, content);

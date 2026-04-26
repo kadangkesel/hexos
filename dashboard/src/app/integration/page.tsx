@@ -42,7 +42,7 @@ import { toast } from "sonner";
 import yaml from "js-yaml";
 import { Checkbox, CheckboxIndicator } from "@/components/animate-ui/primitives/base/checkbox";
 import { motion, AnimatePresence } from "motion/react";
-import { cn } from "@/lib/utils";
+import { cn, copyText } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /*  Icon / color mapping                                               */
@@ -65,7 +65,7 @@ const iconColors: Record<string, string> = {
 };
 
 function copyToClipboard(text: string, label = "Copied") {
-  navigator.clipboard.writeText(text).then(() => toast.success(label));
+  copyText(text).then(() => toast.success(label)).catch(() => toast.error("Failed to copy"));
 }
 
 /* ------------------------------------------------------------------ */
