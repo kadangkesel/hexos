@@ -260,25 +260,19 @@ export async function startServer(
     const batPath = path.join(MITM_DIR, "_mitm_run.bat");
     const batContent = [
       `@echo off`,
-      `title Hexos MITM Server`,
       `set ROUTER_API_KEY=${apiKey}`,
       `set MITM_ROUTER_BASE=${mitmRouterBase}`,
       `set HOME=${os.homedir()}`,
-      `echo Starting Hexos MITM server on port 443...`,
       `"${bunPath}" run "${SERVER_PATH}"`,
-      `echo.`,
-      `echo MITM server stopped. Press any key to close.`,
-      `pause >nul`,
     ].join("\r\n");
     fs.writeFileSync(batPath, batContent, "utf8");
 
-    // Launch elevated — fire-and-forget (no -Wait)
+    // Launch elevated + hidden — UAC still shows but CMD window is hidden after approval
     try {
-      // PowerShell single-quoted strings don't need backslash escaping
       const psPath = batPath.replace(/'/g, "''");
       execSync(
-        `powershell -NoProfile -Command "Start-Process '${psPath}' -Verb RunAs"`,
-        { windowsHide: false, timeout: 15000 },
+        `powershell -NoProfile -Command "Start-Process '${psPath}' -Verb RunAs -WindowStyle Hidden"`,
+        { windowsHide: true, timeout: 15000 },
       );
     } catch {
       throw new Error("MITM server start cancelled — admin elevation required on Windows");
