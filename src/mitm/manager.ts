@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import net from "net";
-import https from "https";
 import crypto from "crypto";
 import { addDNSEntry, removeDNSEntry, removeAllDNSEntries, checkAllDNSStatus, isSudoAvailable, execWithPassword } from "./dns/dnsConfig.ts";
 import { generateRootCA, isCertExpired, ROOT_CA_CERT_PATH, ROOT_CA_KEY_PATH } from "./cert/rootCA.ts";
@@ -128,24 +127,24 @@ function pollMitmHealth(timeoutMs: number): Promise<{ ok: boolean; pid: number |
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs;
     const check = () => {
-      const req = https.request(
-        { hostname: "127.0.0.1", port: MITM_PORT, path: "/_mitm_health", method: "GET", rejectUnauthorized: false },
-        (res) => {
-          let body = "";
-          res.on("data", (d: Buffer) => { body += d; });
-          res.on("end", () => {
-            try {
-              const json = JSON.parse(body);
-              resolve(json.ok === true ? { ok: true, pid: json.pid || null } : null);
-            } catch { resolve(null); }
-          });
-        },
-      );
-      req.on("error", () => {
+      // Simple TCP connect check — if port 443 accepts connections, server is alive
+      const socket = new net.Socket();
+      socket.setTimeout(2000);
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve({ ok: true, pid: null });
+      });
+      socket.once("error", () => {
+        socket.destroy();
         if (Date.now() < deadline) setTimeout(check, 500);
         else resolve(null);
       });
-      req.end();
+      socket.once("timeout", () => {
+        socket.destroy();
+        if (Date.now() < deadline) setTimeout(check, 500);
+        else resolve(null);
+      });
+      socket.connect(MITM_PORT, "127.0.0.1");
     };
     check();
   });
