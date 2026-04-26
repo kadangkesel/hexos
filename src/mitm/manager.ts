@@ -436,15 +436,20 @@ export async function stopServer(sudoPassword: string | null): Promise<{ running
       const { TOOL_HOSTS } = await import("./config.ts");
       const allHosts = Object.values(TOOL_HOSTS).flat();
       const batPath = path.join(MITM_DIR, "_mitm_stop.bat");
+      const hostsFile = `%SystemRoot%\\System32\\drivers\\etc\\hosts`;
+      const tmpHosts = `%TEMP%\\hexos_hosts_clean.tmp`;
       const batLines = [
         `@echo off`,
         `taskkill /F /PID ${pidToKill} /T >nul 2>&1`,
+        // Use findstr /v to remove lines containing MITM hosts (native CMD, no PowerShell)
+        `copy "${hostsFile}" "${tmpHosts}" >nul 2>&1`,
       ];
-      // Remove all MITM hosts from hosts file
-      // Use PowerShell inline for filtering (single line, no pipe issues in .bat)
-      const hostsPath = `%SystemRoot%\\System32\\drivers\\etc\\hosts`;
-      const patterns = allHosts.map((h) => `'${h}'`).join(",");
-      batLines.push(`powershell -NoProfile -Command "(Get-Content '%SystemRoot%\\System32\\drivers\\etc\\hosts') | Where-Object { $line = $_; -not (@(${patterns}) | Where-Object { $line -match $_ }) } | Set-Content '%SystemRoot%\\System32\\drivers\\etc\\hosts' -Encoding UTF8"`);
+      for (const host of allHosts) {
+        batLines.push(`findstr /v /C:"127.0.0.1 ${host}" "${tmpHosts}" > "${tmpHosts}.2" 2>nul && move /y "${tmpHosts}.2" "${tmpHosts}" >nul`);
+      }
+      batLines.push(`copy /y "${tmpHosts}" "${hostsFile}" >nul 2>&1`);
+      batLines.push(`del "${tmpHosts}" >nul 2>&1`);
+      batLines.push(`del "${tmpHosts}.2" >nul 2>&1`);
       batLines.push(`ipconfig /flushdns >nul 2>&1`);
       fs.writeFileSync(batPath, batLines.join("\r\n"), "utf8");
 
@@ -455,8 +460,15 @@ export async function stopServer(sudoPassword: string | null): Promise<{ running
           { windowsHide: true, timeout: 15000 },
         );
       } catch {
-        // Fallback: try direct kill
+        // Fallback: try direct kill + direct hosts cleanup
         try { execSync(`taskkill /F /PID ${pidToKill} /T`, { windowsHide: true }); } catch {}
+        // Try direct file cleanup (works if already admin)
+        try {
+          const content = fs.readFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "drivers", "etc", "hosts"), "utf8");
+          const filtered = content.split(/\r?\n/).filter((line) => !allHosts.some((h) => line.includes(h))).join("\r\n");
+          fs.writeFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "drivers", "etc", "hosts"), filtered, "utf8");
+          execSync("ipconfig /flushdns", { windowsHide: true, stdio: "pipe" });
+        } catch {}
       }
     } else {
       killProcess(pidToKill, false, sudoPassword);
