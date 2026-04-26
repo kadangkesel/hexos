@@ -12,7 +12,7 @@ import { refreshCodebuddy, refreshCline, refreshKiro, refreshQoder } from "../au
 import { PROVIDERS } from "../config/providers.ts";
 import { resolveModel, getUpstreamModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
-import { augmentMessages, applyRulesDeep } from "../utils/transform.ts";
+import { augmentMessages } from "../utils/transform.ts";
 import { openaiToKiro } from "./kiro-transform.ts";
 import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
 import { buildQoderRequest, buildInferenceUrl, type QoderUserInfo } from "./qoder-auth.ts";
@@ -519,9 +519,9 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
     if (tool_choice) upstreamBody.tool_choice = tool_choice;
   }
 
-  const sanitizedBody = applyRulesDeep(upstreamBody) as any;
+  const sanitizedBody = upstreamBody as any;
   sanitizedBody.model = model;
-  // Restore tools after applyRulesDeep (don't mangle tool schemas)
+  // Tools are preserved as-is (no deep transformation needed)
   if (upstreamBody.tools) sanitizedBody.tools = upstreamBody.tools;
 
   return { finalBodyStr: JSON.stringify(sanitizedBody), model };

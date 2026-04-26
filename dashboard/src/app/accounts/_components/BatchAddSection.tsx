@@ -26,7 +26,7 @@ export function BatchAddSection() {
   const [text, setText] = useState("");
   const [concurrency, setConcurrency] = useState(2);
   const [headless, setHeadless] = useState(true);
-  const [providers, setProviders] = useState<string[]>(["Service"]);
+  const [providers, setProviders] = useState<string[]>(["codebuddy"]);
   const [cancelling, setCancelling] = useState(false);
   const taskId = batchTaskId;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -137,7 +137,7 @@ export function BatchAddSection() {
 
           <div className="flex flex-wrap gap-4">
             {[
-              { id: "Service", label: "Service" },
+              { id: "codebuddy", label: "Codebuddy" },
               { id: "cline", label: "Cline" },
               { id: "kiro", label: "Kiro" },
               { id: "qoder", label: "Qoder" },

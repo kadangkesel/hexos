@@ -84,7 +84,7 @@ export function FilterUnconnectedSection() {
   const connectedEmails = useMemo(() => {
     const map = new Map<string, Set<string>>();
     for (const item of allLabels) {
-      const p = item.provider || "Service";
+      const p = item.provider || "codebuddy";
       if (!map.has(p)) map.set(p, new Set());
       map.get(p)!.add((item.label ?? "").toLowerCase());
     }
@@ -162,7 +162,7 @@ export function FilterUnconnectedSection() {
           <div className="flex items-center flex-wrap gap-3">
             <Label className="text-xs text-muted-foreground shrink-0">Provider:</Label>
             <div className="flex gap-1.5">
-              {(["Service", "cline", "kiro", "qoder", "codex"] as string[]).map((p) => (
+              {(["codebuddy", "cline", "kiro", "qoder", "codex"] as string[]).map((p) => (
                 <Button
                   key={p}
                   variant={provider === p ? "default" : "outline"}
@@ -170,7 +170,7 @@ export function FilterUnconnectedSection() {
                   className="h-7 text-xs px-3"
                   onClick={() => setProvider(p)}
                 >
-                  {p === "Service" ? "Service" : p === "cline" ? "Cline" : p === "kiro" ? "Kiro" : p === "qoder" ? "Qoder" : "Codex"}
+                  {p === "codebuddy" ? "Codebuddy" : p === "cline" ? "Cline" : p === "kiro" ? "Kiro" : p === "qoder" ? "Qoder" : "Codex"}
                   <Badge variant="secondary" className="ml-1.5 text-[9px] px-1 py-0">
                     {connectedEmails.get(p)?.size ?? 0}
                   </Badge>
@@ -209,7 +209,7 @@ export function FilterUnconnectedSection() {
             <div className="rounded-md border border-border overflow-hidden">
               <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b border-border">
                 <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                  Unconnected to {provider === "Service" ? "Service" : provider === "cline" ? "Cline" : provider === "kiro" ? "Kiro" : provider === "qoder" ? "Qoder" : "Codex"} ({parsed.missing.length})
+                  Unconnected to {provider === "codebuddy" ? "Service" : provider === "cline" ? "Cline" : provider === "kiro" ? "Kiro" : provider === "qoder" ? "Qoder" : "Codex"} ({parsed.missing.length})
                 </span>
               </div>
               <div className="max-h-[200px] overflow-y-auto">
