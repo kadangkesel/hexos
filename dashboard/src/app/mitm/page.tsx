@@ -39,7 +39,7 @@ import {
   Loader2,
   Trash2,
   Plus,
-  Github,
+  GitFork,
   Cloud,
   Cpu,
   MousePointer,
@@ -67,7 +67,7 @@ const TOOLS: ToolMeta[] = [
   {
     id: "copilot",
     name: "GitHub Copilot",
-    icon: Github,
+    icon: GitFork,
     hosts: ["api.individual.githubcopilot.com"],
   },
   {
