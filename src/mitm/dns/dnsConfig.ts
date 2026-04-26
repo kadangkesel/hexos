@@ -34,10 +34,13 @@ function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
 
   try {
     execSync(
-      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${scriptPath.replace(/'/g, "''")}' -Verb RunAs -Wait"`,
+      `powershell -NoProfile -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','handle','-File','${scriptPath.replace(/'/g, "''")}' -Verb RunAs -Wait"`,
       { timeout: timeoutMs, windowsHide: false },
     );
-  } catch { /* user may cancel UAC */ }
+  } catch (e: any) {
+    // Log the actual error for debugging
+    console.error(`[MITM] Elevated command failed: ${e.message}`);
+  }
 
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -48,6 +51,7 @@ function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
     }
     if (fs.existsSync(errPath)) {
       const errMsg = fs.readFileSync(errPath, "utf8").trim();
+      console.error(`[MITM] Elevated script error: ${errMsg}`);
       try { fs.unlinkSync(errPath); } catch {}
       try { fs.unlinkSync(scriptPath); } catch {}
       throw new Error(errMsg || "Elevated command failed");
@@ -55,7 +59,8 @@ function runElevatedWindows(command: string, timeoutMs: number = 30000): void {
     const start = Date.now();
     while (Date.now() - start < 100) { /* spin */ }
   }
-  try { fs.unlinkSync(scriptPath); } catch {}
+  // Don't delete script on timeout — leave for debugging
+  console.error(`[MITM] Elevated command timed out. Script at: ${scriptPath}`);
   throw new Error("Admin elevation timed out or was cancelled");
 }
 
