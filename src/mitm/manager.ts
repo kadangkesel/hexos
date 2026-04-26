@@ -254,21 +254,39 @@ export async function startServer(
   const bunPath = process.execPath || "bun";
 
   if (IS_WIN) {
-    // Windows: port 443 needs admin — write a .bat launcher, elevate it
+    // Windows: port 443 needs admin — write a single .bat that does EVERYTHING:
+    // 1. Add DNS entries to hosts file
+    // 2. Flush DNS cache
+    // 3. Start the MITM server
+    // This way only ONE UAC prompt is needed.
     if (!fs.existsSync(MITM_DIR)) fs.mkdirSync(MITM_DIR, { recursive: true });
 
-    // Write a batch file that runs the MITM server
     const batPath = path.join(MITM_DIR, "_mitm_run.bat");
-    const batContent = [
-      `@echo off`,
-      `set ROUTER_API_KEY=${apiKey}`,
-      `set MITM_ROUTER_BASE=${mitmRouterBase}`,
-      `set HOME=${os.homedir()}`,
-      `"${bunPath}" run "${SERVER_PATH}"`,
-    ].join("\r\n");
-    fs.writeFileSync(batPath, batContent, "utf8");
+    const batLines = [`@echo off`];
 
-    // Launch elevated + hidden — UAC still shows but CMD window is hidden after approval
+    // Add DNS entries for selected tools
+    if (tools.length > 0) {
+      const { TOOL_HOSTS } = await import("./config.ts");
+      for (const tool of tools) {
+        const hosts = TOOL_HOSTS[tool];
+        if (!hosts) continue;
+        for (const host of hosts) {
+          // Only add if not already present (findstr returns errorlevel 1 if not found)
+          batLines.push(`findstr /C:"${host}" "%SystemRoot%\\System32\\drivers\\etc\\hosts" >nul 2>&1 || echo 127.0.0.1 ${host}>>"%SystemRoot%\\System32\\drivers\\etc\\hosts"`);
+        }
+      }
+      batLines.push(`ipconfig /flushdns >nul 2>&1`);
+    }
+
+    // Start the MITM server (this blocks — keeps the elevated process alive)
+    batLines.push(`set ROUTER_API_KEY=${apiKey}`);
+    batLines.push(`set MITM_ROUTER_BASE=${mitmRouterBase}`);
+    batLines.push(`set HOME=${os.homedir()}`);
+    batLines.push(`"${bunPath}" run "${SERVER_PATH}"`);
+
+    fs.writeFileSync(batPath, batLines.join("\r\n"), "utf8");
+
+    // Launch elevated + hidden — single UAC prompt for everything
     try {
       const psPath = batPath.replace(/'/g, "''");
       execSync(
@@ -279,11 +297,10 @@ export async function startServer(
       throw new Error("MITM server start cancelled — admin elevation required on Windows");
     }
 
-    // Don't track serverProcess on Windows — it's a separate elevated process
     serverProcess = null;
     mitmLastStartTime = Date.now();
 
-    // Wait for server to be healthy (no PID tracking on Windows, use health check only)
+    // Wait for server to be healthy
   } else if (isSudoAvailable()) {
     const inlineCmd = [
       `HOME=${shellQuoteSingle(os.homedir())}`,
@@ -359,8 +376,14 @@ export async function startServer(
   console.log(`✅ MITM server healthy (PID: ${serverPid || health.pid})`);
 
   // Step 5: Enable DNS for selected tools
-  const password = sudoPassword || getCachedPassword();
-  if (tools.length > 0) {
+  // On Windows, DNS was already added in the .bat file — just log status
+  if (IS_WIN) {
+    const dnsStatus = checkAllDNSStatus();
+    for (const [tool, active] of Object.entries(dnsStatus)) {
+      console.log(`🌐 DNS ${tool}: ${active ? "✅ active" : "❌ inactive"}`);
+    }
+  } else if (tools.length > 0) {
+    const password = sudoPassword || getCachedPassword();
     for (const tool of tools) {
       try {
         await addDNSEntry(tool, password);
@@ -406,14 +429,31 @@ export async function stopServer(sudoPassword: string | null): Promise<{ running
   if (pidToKill) {
     console.log(`Killing MITM server (PID: ${pidToKill})...`);
     if (IS_WIN) {
-      // Windows: elevated process needs elevated kill
+      // Windows: single elevated script to kill process + clean DNS
+      const { TOOL_HOSTS } = await import("./config.ts");
+      const allHosts = Object.values(TOOL_HOSTS).flat();
+      const batPath = path.join(MITM_DIR, "_mitm_stop.bat");
+      const batLines = [
+        `@echo off`,
+        `taskkill /F /PID ${pidToKill} /T >nul 2>&1`,
+      ];
+      // Remove all MITM hosts from hosts file
+      // Use PowerShell inline for filtering (single line, no pipe issues in .bat)
+      const hostsPath = `%SystemRoot%\\System32\\drivers\\etc\\hosts`;
+      const patterns = allHosts.map((h) => `'${h}'`).join(",");
+      batLines.push(`powershell -NoProfile -Command "(Get-Content '%SystemRoot%\\System32\\drivers\\etc\\hosts') | Where-Object { $line = $_; -not (@(${patterns}) | Where-Object { $line -match $_ }) } | Set-Content '%SystemRoot%\\System32\\drivers\\etc\\hosts' -Encoding UTF8"`);
+      batLines.push(`ipconfig /flushdns >nul 2>&1`);
+      fs.writeFileSync(batPath, batLines.join("\r\n"), "utf8");
+
       try {
-        execSync(`powershell -NoProfile -Command "Start-Process taskkill -ArgumentList '/F','/PID','${pidToKill}','/T' -Verb RunAs -Wait -WindowStyle Hidden"`, {
-          windowsHide: true, timeout: 10000,
-        });
+        const psPath = batPath.replace(/'/g, "''");
+        execSync(
+          `powershell -NoProfile -Command "Start-Process '${psPath}' -Verb RunAs -WindowStyle Hidden -Wait"`,
+          { windowsHide: true, timeout: 15000 },
+        );
       } catch {
-        // Fallback: try direct kill (works if hexos is already admin)
-        try { execSync(`taskkill /F /PID ${pidToKill} /T`, { windowsHide: true }); } catch { /* ignore */ }
+        // Fallback: try direct kill
+        try { execSync(`taskkill /F /PID ${pidToKill} /T`, { windowsHide: true }); } catch {}
       }
     } else {
       killProcess(pidToKill, false, sudoPassword);
@@ -424,8 +464,11 @@ export async function stopServer(sudoPassword: string | null): Promise<{ running
   serverProcess = null;
   serverPid = null;
 
-  const password = sudoPassword || getCachedPassword();
-  await removeAllDNSEntries(password);
+  // Non-Windows: remove DNS entries separately
+  if (!IS_WIN) {
+    const password = sudoPassword || getCachedPassword();
+    await removeAllDNSEntries(password);
+  }
 
   try { fs.unlinkSync(PID_FILE); } catch { /* ignore */ }
   mitmIsRestarting = false;
