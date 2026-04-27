@@ -35,7 +35,7 @@ const MAX_FAILOVER_ATTEMPTS = Infinity;
  */
 async function refreshCreditAfterUse(conn: Connection): Promise<void> {
   try {
-    if (conn.provider === "Service") {
+    if (conn.provider === "codebuddy") {
       // Local credit tracking — just ensure credit is initialized
       await initializeCredit(conn.id, conn.provider);
     } else if (conn.provider === "cline") {
@@ -514,7 +514,7 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
   // Text-replacement filters only needed for Service (cb/) — upstream validates
   // message content and rejects proxy/tool mentions. Other providers (cline, yepapi,
   // codex, etc.) don't need this and messages should pass through unmodified.
-  if (provider === "Service") {
+  if (provider === "codebuddy") {
     upstreamBody.messages = augmentMessages(upstreamBody.messages, provider);
   }
 
@@ -726,7 +726,7 @@ function buildHeaders(conn: Connection, providerConfig: any): Record<string, str
 function debugScanBody(finalBodyStr: string, model: string, providerId?: string) {
   try {
     // Only scan for sensitive words on Service provider requests
-    if (providerId && providerId !== "Service") return;
+    if (providerId && providerId !== "codebuddy") return;
     const fs = require("fs");
     const debugDir = process.cwd();
     fs.writeFileSync(`${debugDir}/hexos-last-request.json`, finalBodyStr);

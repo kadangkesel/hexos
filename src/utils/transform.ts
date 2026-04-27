@@ -355,11 +355,6 @@ const TEXT_RULES: ReplacementRule[] = [
   // =========================================================================
 
   {
-    label: "CodeBuddy → Service",
-    pattern: /\bCodeBuddy\b/gi,
-    replacement: "Service",
-  },
-  {
     label: "content filter → validation",
     pattern: /content.filter/gi,
     replacement: "validation",
