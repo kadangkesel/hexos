@@ -40,7 +40,7 @@ export function AccountRow({ conn, onToggle, onCheck, onRemove, busy }: AccountR
         <div className="flex items-center gap-1.5">
           {conn.label ?? conn.email}
           <Badge variant="outline" className="text-[9px] font-mono shrink-0">
-            {({ codebuddy: "CB", cline: "CL", kiro: "KR", qoder: "QD", codex: "CX" } as Record<string, string>)[String((conn as any).provider)] || String((conn as any).provider)}
+            {({ Service: "CB", cline: "CL", kiro: "KR", qoder: "QD", codex: "CX", yepapi: "YP" } as Record<string, string>)[String((conn as any).provider)] || String((conn as any).provider)}
           </Badge>
         </div>
       </TableCell>

@@ -183,6 +183,7 @@ export function ConnectionsToolbar({
             <SelectItem value="kiro">Kiro (KR)</SelectItem>
             <SelectItem value="qoder">Qoder (QD)</SelectItem>
             <SelectItem value="codex">Codex (CX)</SelectItem>
+            <SelectItem value="yepapi">YepAPI (YP)</SelectItem>
           </SelectContent>
         </Select>
         <Select value={fetchParams.status || "all"} onValueChange={(v: string | null) => onStatusFilter(!v || v === "all" ? "" : v)}>
