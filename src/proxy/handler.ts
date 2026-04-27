@@ -450,12 +450,12 @@ function cleanToolSchemas(tools: any[]): any[] {
 }
 
 /** Recursively clean JSON schema for upstream compatibility */
-function sanitizeSchema(schema: any): any {
+function cleanSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return schema;
 
   const cleaned = { ...schema };
 
-  // Remove additionalProperties (CodeBuddy may not support it)
+  // Remove additionalProperties (Service may not support it)
   delete cleaned.additionalProperties;
 
   // Remove $schema, $defs references
@@ -465,20 +465,20 @@ function sanitizeSchema(schema: any): any {
   if (cleaned.properties) {
     const props: Record<string, any> = {};
     for (const [key, value] of Object.entries(cleaned.properties)) {
-      props[key] = sanitizeSchema(value);
+      props[key] = cleanSchema(value);
     }
     cleaned.properties = props;
   }
 
   // Clean items in arrays
   if (cleaned.items) {
-    cleaned.items = sanitizeSchema(cleaned.items);
+    cleaned.items = cleanSchema(cleaned.items);
   }
 
   // Clean anyOf/oneOf/allOf
   for (const key of ["anyOf", "oneOf", "allOf"]) {
     if (Array.isArray(cleaned[key])) {
-      cleaned[key] = cleaned[key].map((s: any) => sanitizeSchema(s));
+      cleaned[key] = cleaned[key].map((s: any) => cleanSchema(s));
     }
   }
 
@@ -486,7 +486,7 @@ function sanitizeSchema(schema: any): any {
 }
 
 /**
- * Build the sanitized upstream request body.
+ * Build the upstream request body.
  */
 function buildUpstreamBody(body: any, model: string, stream: boolean, provider?: string): { finalBodyStr: string; model: string } {
   const {
