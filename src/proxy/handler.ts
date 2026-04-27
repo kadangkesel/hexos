@@ -541,9 +541,10 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
   if (Array.isArray(tools) && tools.length > 0) {
     if (provider === "yepapi") {
       // YepAPI doesn't support native tool calling — inject tools into system prompt
+      // Pass tools as-is (no schema cleaning needed — YepAPI doesn't validate schemas)
       const withTools = injectToolsIntoMessages({
         ...upstreamBody,
-        tools: process(tools),
+        tools,
         tool_choice: tool_choice,
       });
       upstreamBody.messages = withTools.messages;
