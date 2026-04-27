@@ -23,10 +23,10 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "cb/glm-5.0":              { provider: "codebuddy", model: "glm-5.0",             info: { id: "cb/glm-5.0", name: "GLM 5.0", contextWindow: 128000 } },
 
   // Cline models — paid (prefix: cl/)
-  "cl/claude-opus-4.7":      { provider: "cline", model: "anxthxropic/claude-opus-4.7",   info: { id: "cl/claude-opus-4.7",      name: "Claude Opus 4.7", contextWindow: 1000000 } },
-  "cl/claude-sonnet-4.6":    { provider: "cline", model: "anxthxropic/claude-sonnet-4.6", info: { id: "cl/claude-sonnet-4.6",    name: "Claude Sonnet 4.6", contextWindow: 1000000 } },
-  "cl/claude-opus-4.6":      { provider: "cline", model: "anxthxropic/claude-opus-4.6",   info: { id: "cl/claude-opus-4.6",      name: "Claude Opus 4.6", contextWindow: 1000000 } },
-  "cl/claude-haiku-4.5":     { provider: "cline", model: "anxthxropic/claude-haiku-4.5",  info: { id: "cl/claude-haiku-4.5",     name: "Claude Haiku 4.5", contextWindow: 200000 } },
+  "cl/claude-opus-4.7":      { provider: "cline", model: "anthropic/claude-opus-4.7",   info: { id: "cl/claude-opus-4.7",      name: "Claude Opus 4.7", contextWindow: 1000000 } },
+  "cl/claude-sonnet-4.6":    { provider: "cline", model: "anthropic/claude-sonnet-4.6", info: { id: "cl/claude-sonnet-4.6",    name: "Claude Sonnet 4.6", contextWindow: 1000000 } },
+  "cl/claude-opus-4.6":      { provider: "cline", model: "anthropic/claude-opus-4.6",   info: { id: "cl/claude-opus-4.6",      name: "Claude Opus 4.6", contextWindow: 1000000 } },
+  "cl/claude-haiku-4.5":     { provider: "cline", model: "anthropic/claude-haiku-4.5",  info: { id: "cl/claude-haiku-4.5",     name: "Claude Haiku 4.5", contextWindow: 200000 } },
   "cl/grok-4":               { provider: "cline", model: "x-ai/grok-4",                   info: { id: "cl/grok-4",               name: "Grok 4", contextWindow: 256000 } },
   "cl/gemini-2.5-pro":       { provider: "cline", model: "google/gemini-2.5-pro",          info: { id: "cl/gemini-2.5-pro",       name: "Gemini 2.5 Pro", contextWindow: 1000000 } },
   "cl/gemini-2.5-flash":     { provider: "cline", model: "google/gemini-2.5-flash",        info: { id: "cl/gemini-2.5-flash",     name: "Gemini 2.5 Flash", contextWindow: 1000000 } },

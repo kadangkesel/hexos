@@ -435,7 +435,7 @@ export function createApp() {
     const creditExempt = new Set(["qoder", "codex"]);
 
     for (const conn of conns) {
-      const p = conn.provider || "Service";
+      const p = conn.provider || "codebuddy";
       if (!byProvider[p]) byProvider[p] = { total: 0, used: 0, remaining: 0, count: 0, active: 0, exhausted: 0, expired: 0, banned: 0 };
       byProvider[p].count++;
 

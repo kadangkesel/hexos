@@ -355,11 +355,6 @@ const TEXT_RULES: ReplacementRule[] = [
   // =========================================================================
 
   {
-    label: "CodeBuddy → Service",
-    pattern: /\bCodeBuddy\b/gi,
-    replacement: "Service",
-  },
-  {
     label: "content filter → validation",
     pattern: /content.filter/gi,
     replacement: "validation",
@@ -438,41 +433,6 @@ const TEXT_RULES: ReplacementRule[] = [
     label: "anxthxropic → ai-provider",
     pattern: /anxthxropic/gi,
     replacement: "ai-provider",
-  },
-
-  // =========================================================================
-  // 8. STRIP VERBOSE SECTIONS (reduce prompt size + remove trigger content)
-  // =========================================================================
-
-  // Strip entire memory system instructions (very long, contains trigger words)
-  {
-    label: "strip auto memory section",
-    pattern: /# auto memory\n[\s\S]*?(?=\n# (?!.*memory)|$)/gi,
-    replacement: "# Memory\nPersistent memory system available.\n\n",
-  },
-  // Strip skills list (contains security-review, systematic-debugging etc)
-  {
-    label: "strip skills list reminder",
-    pattern: /<system-reminder>\nThe following skills are available[\s\S]*?<\/system-reminder>/gi,
-    replacement: "",
-  },
-  // Strip MCP server instructions
-  {
-    label: "strip MCP server instructions",
-    pattern: /<system-reminder>\n# MCP Server Instructions[\s\S]*?<\/system-reminder>/gi,
-    replacement: "",
-  },
-  // Strip context history that mentions "sensitive content warning"
-  {
-    label: "strip recent context with sensitive mentions",
-    pattern: /# \[hexos\] recent context[\s\S]*?(?=<\/system-reminder>)/gi,
-    replacement: "",
-  },
-  // Strip session-start hook content (superpowers instructions)
-  {
-    label: "strip superpowers skill content",
-    pattern: /\*\*Below is the full content of your 'superpowers:using-superpowers'[\s\S]*?<\/EXTREMELY_IMPORTANT>/gi,
-    replacement: "",
   },
 
   // =========================================================================

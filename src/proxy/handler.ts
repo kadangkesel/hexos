@@ -35,7 +35,7 @@ const MAX_FAILOVER_ATTEMPTS = Infinity;
  */
 async function refreshCreditAfterUse(conn: Connection): Promise<void> {
   try {
-    if (conn.provider === "Service") {
+    if (conn.provider === "codebuddy") {
       // Local credit tracking — just ensure credit is initialized
       await initializeCredit(conn.id, conn.provider);
     } else if (conn.provider === "cline") {
@@ -715,7 +715,7 @@ function buildHeaders(conn: Connection, providerConfig: any): Record<string, str
 function debugScanBody(finalBodyStr: string, model: string, providerId?: string) {
   try {
     // Only scan for sensitive words on Service provider requests
-    if (providerId && providerId !== "Service") return;
+    if (providerId && providerId !== "codebuddy") return;
     const fs = require("fs");
     const debugDir = process.cwd();
     fs.writeFileSync(`${debugDir}/hexos-last-request.json`, finalBodyStr);
