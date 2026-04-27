@@ -41,17 +41,25 @@ export const STATUS_LABEL: Record<ConnectionStatus, string> = {
   exhausted: "exhausted",
 };
 
+// Providers that use API keys without a credit system — don't check remainingCredits
+const CREDIT_EXEMPT_PROVIDERS = new Set(["yepapi", "openai", "qoder", "codex"]);
+
 export function getStatus(conn: Connection): ConnectionStatus {
   // Check backend status first (set by token validation / proxy handler)
   const backendStatus = String((conn as any).status || "active");
   if (backendStatus === "expired") return "expired";
   if (backendStatus === "disabled") {
+    // Credit-exempt providers: disabled = suspended (not credit exhausted)
+    if (CREDIT_EXEMPT_PROVIDERS.has(conn.provider)) return "suspended";
     // Distinguish between credit exhausted and suspended/banned
     const credit = conn.credit as Record<string, unknown> | undefined;
     const remaining = Number(credit?.remainingCredits ?? -1);
     if (remaining === 0) return "exhausted";
     return "suspended";
   }
+
+  // Credit-exempt providers: skip credit check, trust backend status
+  if (CREDIT_EXEMPT_PROVIDERS.has(conn.provider)) return "active";
 
   // Check credit
   const credit = conn.credit as Record<string, unknown> | undefined;

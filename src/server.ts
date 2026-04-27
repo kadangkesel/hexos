@@ -664,6 +664,55 @@ export function createApp() {
       return c.json({ valid: true, email: parsed.email, plan: parsed.planType, credit: conn.credit });
     }
     
+    // YepAPI — validate API key with a lightweight test request
+    if (conn.provider === "yepapi") {
+      try {
+        const testBody = JSON.stringify({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false });
+        const testRes = await fetch("https://api.yepapi.com/v1/ai/chat/completions", {
+          method: "POST",
+          headers: { "x-api-key": conn.accessToken, "Content-Type": "application/json" },
+          body: testBody,
+          signal: AbortSignal.timeout(15000),
+        });
+        if (testRes.status === 401) {
+          log.warn(`[Check] ${conn.label} (YepAPI) API key invalid (401)`);
+          await setConnectionStatus(conn.id, "expired");
+          return c.json({ valid: false, expired: true, reason: "api_key_invalid" });
+        }
+        // Any non-401 means key is accepted (even 429/5xx are transient)
+        if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+        log.info(`[Check] ${conn.label} (YepAPI) API key valid (status: ${testRes.status})`);
+        return c.json({ valid: true, provider: "yepapi" });
+      } catch (e: any) {
+        log.warn(`[Check] ${conn.label} (YepAPI) check failed: ${e.message} — keeping status`);
+        if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+        return c.json({ valid: true, reason: "check_failed_network", note: e.message });
+      }
+    }
+    
+    // OpenAI — validate by sending a lightweight request
+    if (conn.provider === "openai") {
+      try {
+        const testBody = JSON.stringify({ model: "gpt-4o-mini", messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false });
+        const testRes = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${conn.accessToken}`, "Content-Type": "application/json" },
+          body: testBody,
+          signal: AbortSignal.timeout(10000),
+        });
+        if (testRes.status === 401) {
+          log.warn(`[Check] ${conn.label} (OpenAI) API key invalid (401)`);
+          await setConnectionStatus(conn.id, "expired");
+          return c.json({ valid: false, expired: true, reason: "api_key_invalid" });
+        }
+        if (conn.status !== "active") await setConnectionStatus(conn.id, "active");
+        return c.json({ valid: true, provider: "openai" });
+      } catch (e: any) {
+        log.warn(`[Check] ${conn.label} (OpenAI) check failed: ${e.message} — keeping status`);
+        return c.json({ valid: true, reason: "check_failed_network", note: e.message });
+      }
+    }
+    
     // Service
     const status = await checkToken(conn.accessToken);
     
@@ -930,8 +979,58 @@ export function createApp() {
           
           const parsed = parseCodexToken(conn.accessToken);
           status = { valid: true, email: parsed.email };
+        } else if (conn.provider === "yepapi") {
+          // YepAPI — validate API key with a lightweight test request
+          try {
+            const testBody = JSON.stringify({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false });
+            const testRes = await fetch("https://api.yepapi.com/v1/ai/chat/completions", {
+              method: "POST",
+              headers: { "x-api-key": conn.accessToken, "Content-Type": "application/json" },
+              body: testBody,
+              signal: AbortSignal.timeout(15000),
+            });
+            if (testRes.status === 401) {
+              log.warn(`[Check credits] ${conn.label} (YepAPI) API key invalid (401)`);
+              if (conn.status !== "expired") {
+                await setConnectionStatus(conn.id, "expired");
+                expiredCount++;
+              }
+              results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "api_key_invalid" });
+              return;
+            }
+            // Any non-401 means key is accepted
+            status = { valid: true };
+            log.info(`[Check credits] ${conn.label} (YepAPI) API key valid (status: ${testRes.status})`);
+          } catch (e: any) {
+            log.warn(`[Check credits] ${conn.label} (YepAPI) check failed: ${e.message} — keeping status`);
+            status = { valid: true };
+          }
+        } else if (conn.provider === "openai") {
+          // OpenAI — validate with lightweight request
+          try {
+            const testBody = JSON.stringify({ model: "gpt-4o-mini", messages: [{ role: "user", content: "hi" }], max_tokens: 1, stream: false });
+            const testRes = await fetch("https://api.openai.com/v1/chat/completions", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${conn.accessToken}`, "Content-Type": "application/json" },
+              body: testBody,
+              signal: AbortSignal.timeout(10000),
+            });
+            if (testRes.status === 401) {
+              log.warn(`[Check credits] ${conn.label} (OpenAI) API key invalid (401)`);
+              if (conn.status !== "expired") {
+                await setConnectionStatus(conn.id, "expired");
+                expiredCount++;
+              }
+              results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "api_key_invalid" });
+              return;
+            }
+            status = { valid: true };
+          } catch (e: any) {
+            log.warn(`[Check credits] ${conn.label} (OpenAI) check failed: ${e.message} — keeping status`);
+            status = { valid: true };
+          }
         } else {
-          // CodeBuddy
+          // Service
           status = await checkToken(conn.accessToken);
           
           if (!status.valid) {
@@ -939,7 +1038,7 @@ export function createApp() {
             if (conn.status !== "expired") {
               await setConnectionStatus(conn.id, "expired");
               expiredCount++;
-              log.warn(`[Check credits] ${conn.label} (CodeBuddy) token invalid - marked expired`);
+              log.warn(`[Check credits] ${conn.label} (Service) token invalid - marked expired`);
             }
             results.push({ id: conn.id, label: conn.label, provider: conn.provider, valid: false, expired: true, reason: "token_invalid" });
             return;

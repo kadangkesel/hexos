@@ -23,10 +23,10 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "cb/glm-5.0":              { provider: "codebuddy", model: "glm-5.0",             info: { id: "cb/glm-5.0", name: "GLM 5.0", contextWindow: 128000 } },
 
   // Cline models — paid (prefix: cl/)
-  "cl/claude-opus-4.7":      { provider: "cline", model: "anxthxropic/claude-opus-4.7",   info: { id: "cl/claude-opus-4.7",      name: "Claude Opus 4.7", contextWindow: 1000000 } },
-  "cl/claude-sonnet-4.6":    { provider: "cline", model: "anxthxropic/claude-sonnet-4.6", info: { id: "cl/claude-sonnet-4.6",    name: "Claude Sonnet 4.6", contextWindow: 1000000 } },
-  "cl/claude-opus-4.6":      { provider: "cline", model: "anxthxropic/claude-opus-4.6",   info: { id: "cl/claude-opus-4.6",      name: "Claude Opus 4.6", contextWindow: 1000000 } },
-  "cl/claude-haiku-4.5":     { provider: "cline", model: "anxthxropic/claude-haiku-4.5",  info: { id: "cl/claude-haiku-4.5",     name: "Claude Haiku 4.5", contextWindow: 200000 } },
+  "cl/claude-opus-4.7":      { provider: "cline", model: "anthropic/claude-opus-4.7",   info: { id: "cl/claude-opus-4.7",      name: "Claude Opus 4.7", contextWindow: 1000000 } },
+  "cl/claude-sonnet-4.6":    { provider: "cline", model: "anthropic/claude-sonnet-4.6", info: { id: "cl/claude-sonnet-4.6",    name: "Claude Sonnet 4.6", contextWindow: 1000000 } },
+  "cl/claude-opus-4.6":      { provider: "cline", model: "anthropic/claude-opus-4.6",   info: { id: "cl/claude-opus-4.6",      name: "Claude Opus 4.6", contextWindow: 1000000 } },
+  "cl/claude-haiku-4.5":     { provider: "cline", model: "anthropic/claude-haiku-4.5",  info: { id: "cl/claude-haiku-4.5",     name: "Claude Haiku 4.5", contextWindow: 200000 } },
   "cl/grok-4":               { provider: "cline", model: "x-ai/grok-4",                   info: { id: "cl/grok-4",               name: "Grok 4", contextWindow: 256000 } },
   "cl/gemini-2.5-pro":       { provider: "cline", model: "google/gemini-2.5-pro",          info: { id: "cl/gemini-2.5-pro",       name: "Gemini 2.5 Pro", contextWindow: 1000000 } },
   "cl/gemini-2.5-flash":     { provider: "cline", model: "google/gemini-2.5-flash",        info: { id: "cl/gemini-2.5-flash",     name: "Gemini 2.5 Flash", contextWindow: 1000000 } },
@@ -73,7 +73,7 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "cx/codex-auto-review":    { provider: "codex", model: "codex-auto-review",  info: { id: "cx/codex-auto-review",   name: "Codex Auto Review (Hidden)", contextWindow: 272000 } },
 
   // YepAPI models (prefix: yp/) — 70 models from api.yepapi.com/v1/ai/models
-  // Upstream model names use provider/model format (e.g. openai/gpt-4o, AI Provider/sonnet-4.6)
+  // Upstream model names use provider/model format (e.g. openai/gpt-4o, anthropic/sonnet-4.6)
   // OpenAI
   "yp/gpt-4o":                            { provider: "yepapi", model: "openai/gpt-4o",                                    info: { id: "yp/gpt-4o",                            name: "GPT-4o",                     contextWindow: 128000 } },
   "yp/gpt-4o-mini":                       { provider: "yepapi", model: "openai/gpt-4o-mini",                               info: { id: "yp/gpt-4o-mini",                       name: "GPT-4o Mini",                contextWindow: 128000 } },
@@ -91,14 +91,14 @@ export const MODEL_CATALOG: Record<string, { provider: string; model: string; in
   "yp/gpt-audio":                         { provider: "yepapi", model: "openai/gpt-audio",                                 info: { id: "yp/gpt-audio",                         name: "GPT Audio",                  contextWindow: 128000 } },
   "yp/gpt-audio-mini":                    { provider: "yepapi", model: "openai/gpt-audio-mini",                            info: { id: "yp/gpt-audio-mini",                    name: "GPT Audio Mini",             contextWindow: 128000 } },
   "yp/gpt-oss-120b":                      { provider: "yepapi", model: "openai/gpt-oss-120b",                              info: { id: "yp/gpt-oss-120b",                      name: "GPT-OSS 120B",               contextWindow: 131072 } },
-  // AI Provider
-  "yp/opus-4.7":                          { provider: "yepapi", model: "AI Provider/opus-4.7",                             info: { id: "yp/opus-4.7",                          name: "Opus 4.7",                   contextWindow: 1000000 } },
-  "yp/opus-4.6":                          { provider: "yepapi", model: "AI Provider/opus-4.6",                             info: { id: "yp/opus-4.6",                          name: "Opus 4.6",                   contextWindow: 1000000 } },
-  "yp/opus-4.6-fast":                     { provider: "yepapi", model: "AI Provider/opus-4.6-fast",                        info: { id: "yp/opus-4.6-fast",                     name: "Opus 4.6 Fast",              contextWindow: 1000000 } },
-  "yp/sonnet-4.6":                        { provider: "yepapi", model: "AI Provider/sonnet-4.6",                           info: { id: "yp/sonnet-4.6",                        name: "Sonnet 4.6",                 contextWindow: 1000000 } },
-  "yp/sonnet-4.5":                        { provider: "yepapi", model: "AI Provider/sonnet-4.5",                           info: { id: "yp/sonnet-4.5",                        name: "Sonnet 4.5",                 contextWindow: 1000000 } },
-  "yp/sonnet-4":                          { provider: "yepapi", model: "AI Provider/sonnet-4",                             info: { id: "yp/sonnet-4",                          name: "Sonnet 4",                   contextWindow: 200000 } },
-  "yp/haiku-4":                           { provider: "yepapi", model: "AI Provider/haiku-4",                              info: { id: "yp/haiku-4",                           name: "Haiku 4",                    contextWindow: 200000 } },
+  // anthropic
+  "yp/opus-4.7":                          { provider: "yepapi", model: "anthropic/claude-opus-4.7",                             info: { id: "yp/opus-4.7",                          name: "Claude Opus 4.7",                   contextWindow: 1000000 } },
+  "yp/opus-4.6":                          { provider: "yepapi", model: "anthropic/claude-opus-4.6",                             info: { id: "yp/opus-4.6",                          name: "Claude Opus 4.6",                   contextWindow: 1000000 } },
+  "yp/opus-4.6-fast":                     { provider: "yepapi", model: "anthropic/claude-opus-4.6-fast",                        info: { id: "yp/opus-4.6-fast",                     name: "Claude Opus 4.6 Fast",              contextWindow: 1000000 } },
+  "yp/sonnet-4.6":                        { provider: "yepapi", model: "anthropic/claude-sonnet-4.6",                           info: { id: "yp/sonnet-4.6",                        name: "Claude Sonnet 4.6",                 contextWindow: 1000000 } },
+  "yp/sonnet-4.5":                        { provider: "yepapi", model: "anthropic/claude-sonnet-4.5",                           info: { id: "yp/sonnet-4.5",                        name: "Claude Sonnet 4.5",                 contextWindow: 1000000 } },
+  "yp/sonnet-4":                          { provider: "yepapi", model: "anthropic/claude-sonnet-4",                             info: { id: "yp/sonnet-4",                          name: "Claude Sonnet 4",                   contextWindow: 200000 } },
+  "yp/haiku-4":                           { provider: "yepapi", model: "anthropic/claude-haiku-4",                              info: { id: "yp/haiku-4",                           name: "Claude Haiku 4",                    contextWindow: 200000 } },
   // Google
   "yp/gemini-3.1-pro-preview":            { provider: "yepapi", model: "google/gemini-3.1-pro-preview",                    info: { id: "yp/gemini-3.1-pro-preview",            name: "Gemini 3.1 Pro",             contextWindow: 1048576 } },
   "yp/gemini-3-flash-preview":            { provider: "yepapi", model: "google/gemini-3-flash-preview",                    info: { id: "yp/gemini-3-flash-preview",            name: "Gemini 3 Flash",             contextWindow: 1000000 } },

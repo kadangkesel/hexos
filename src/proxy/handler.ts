@@ -295,9 +295,15 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
             continue;
           }
         }
-        // No refresh token — mark expired and failover to next account
-        log.warn(`[${connLabel}] Unauthorized (401), no refresh token — trying next account...`);
-        await setConnectionStatus(conn.id, "expired");
+        // No refresh token — for API key providers, don't disable (keys don't expire,
+        // 401 likely means transient issue or wrong model). For OAuth, mark expired.
+        if (providerConfig.authType === "apikey") {
+          log.warn(`[${connLabel}] Unauthorized (401), API key provider — trying next account (key preserved)...`);
+          await recordFailure(conn.id);
+        } else {
+          log.warn(`[${connLabel}] Unauthorized (401), no refresh token — marking expired, trying next account...`);
+          await setConnectionStatus(conn.id, "expired");
+        }
         lastError = `${connLabel}: Unauthorized (401)`;
         continue;
       }
@@ -333,7 +339,13 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
           if (lower.includes("credit") || lower.includes("quota") || lower.includes("balance") || lower.includes("insufficient") || lower.includes("exceeded")) {
             reason = "Credit exhausted";
             log.error(`[${connLabel}] Credit exhausted (429): ${body.slice(0, 200)}`);
-            await setConnectionStatus(conn.id, "disabled");
+            // API key providers: don't disable — user can top up balance
+            if (providerConfig.authType !== "apikey") {
+              await setConnectionStatus(conn.id, "disabled");
+            } else {
+              log.warn(`[${connLabel}] API key provider — connection preserved (top up balance to fix)`);
+              await recordFailure(conn.id);
+            }
           } else {
             log.warn(`[${connLabel}] Rate limited (429): ${body.slice(0, 200)}`);
           }
