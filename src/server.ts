@@ -6,7 +6,7 @@ import { listModels, resolveModel, MODEL_CATALOG } from "./config/models.ts";
 import { log } from "./utils/logger.ts";
 import { anthropicToOpenAI, openAIToAnthropicStream } from "./proxy/anthropic.ts";
 import { augmentMessages } from "./utils/transform.ts";
-import { createUsageTrackingStream, recordUsage, startRequest, completeRequest, getStats, getRecords } from "./tracking/tracker.ts";
+import { createUsageTrackingStream, recordUsage, startRequest, completeRequest, getStats, getRecords, getLogBodies } from "./tracking/tracker.ts";
 import { batchConnect, isAutomationReady, checkToken, checkKiroToken, parseCodexToken } from "./auth/oauth.ts";
 import crypto from "crypto";
 import { PROVIDERS } from "./config/providers.ts";
@@ -1509,7 +1509,13 @@ export function createApp() {
     const model = c.req.query("model") || undefined;
     const accountId = c.req.query("accountId") || undefined;
     const since = c.req.query("since") ? parseInt(c.req.query("since")!) : undefined;
-    return c.json(getRecords({ limit, model, accountId, since }));
+    const records = getRecords({ limit, model, accountId, since });
+    // Join bodies from separate logs file
+    const bodies = getLogBodies(records.map((r) => r.id));
+    return c.json(records.map((r) => ({
+      ...r,
+      ...bodies[r.id],
+    })));
   });
 
   // --- Usage stats with time range ---

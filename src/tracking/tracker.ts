@@ -7,6 +7,7 @@ import { calculateCost } from "../config/pricing.ts";
 
 const DATA_DIR = join(homedir(), ".hexos");
 const USAGE_FILE = join(DATA_DIR, "usage.json");
+const LOGS_FILE = join(DATA_DIR, "logs.json");
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -74,12 +75,25 @@ interface UsageDbSchema {
   records: UsageRecord[];
 }
 
+interface LogEntry {
+  id: string; // matches UsageRecord.id
+  requestBody?: string;
+  responseBody?: string;
+}
+
+interface LogsDbSchema {
+  entries: LogEntry[];
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
 
 const defaultData: UsageDbSchema = { records: [] };
 const db = await JSONFilePreset<UsageDbSchema>(USAGE_FILE, defaultData);
+
+const defaultLogsData: LogsDbSchema = { entries: [] };
+const logsDb = await JSONFilePreset<LogsDbSchema>(LOGS_FILE, defaultLogsData);
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -88,14 +102,14 @@ const db = await JSONFilePreset<UsageDbSchema>(USAGE_FILE, defaultData);
 /** Max body size to store (chars). Bodies larger than this are truncated. */
 const MAX_BODY_SIZE = 16000;
 
-/** Max records to keep in DB */
-const MAX_RECORDS = 5000;
+/** Max records to keep in usage DB (lightweight — no bodies) */
+const MAX_RECORDS = 50000;
 
-/** Max file size in bytes before aggressive cleanup (15 MB) */
-const MAX_FILE_SIZE = 15 * 1024 * 1024;
+/** Max log entries to keep (contains bodies — heavier) */
+const MAX_LOG_ENTRIES = 2000;
 
-/** After aggressive cleanup, keep this many records */
-const CLEANUP_KEEP = 2000;
+/** Max logs.json file size before aggressive cleanup (10 MB) */
+const MAX_LOGS_FILE_SIZE = 10 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -107,46 +121,73 @@ function truncateBody(body: string | undefined): string | undefined {
   return body.slice(0, MAX_BODY_SIZE) + "\n...[truncated]";
 }
 
-/** Check file size and aggressively clean if too large */
+/** Write body log entry to separate logs.json */
+async function writeLogEntry(id: string, requestBody?: string, responseBody?: string) {
+  const entry: LogEntry = { id };
+  if (requestBody) entry.requestBody = truncateBody(requestBody);
+  if (responseBody) entry.responseBody = truncateBody(responseBody);
+  logsDb.data.entries.push(entry);
+  // Rotate log entries
+  if (logsDb.data.entries.length > MAX_LOG_ENTRIES) {
+    logsDb.data.entries = logsDb.data.entries.slice(-MAX_LOG_ENTRIES);
+  }
+  await logsDb.write();
+}
+
+/** Append response body to existing log entry */
+async function appendLogResponse(id: string, responseBody?: string) {
+  const entry = logsDb.data.entries.find((e) => e.id === id);
+  if (entry) {
+    entry.responseBody = truncateBody(responseBody);
+  } else {
+    logsDb.data.entries.push({ id, responseBody: truncateBody(responseBody) });
+  }
+  await logsDb.write();
+}
+
+/** Cleanup usage records (lightweight — no bodies) */
 async function autoCleanup() {
-  // Rotate by record count
   if (db.data.records.length > MAX_RECORDS) {
     db.data.records = db.data.records.slice(-MAX_RECORDS);
   }
+  await db.write();
+}
 
-  // Check file size
+/** Cleanup logs.json by file size */
+async function autoCleanupLogs() {
   try {
-    const stat = statSync(USAGE_FILE);
-    if (stat.size > MAX_FILE_SIZE) {
-      log.warn(`Usage log too large (${(stat.size / 1024 / 1024).toFixed(1)} MB), cleaning to ${CLEANUP_KEEP} records...`);
-      // Keep only recent records and strip bodies from old ones to save space
-      db.data.records = db.data.records.slice(-CLEANUP_KEEP);
-      // Strip bodies from records older than 1 hour to further reduce size
-      const oneHourAgo = Date.now() - 60 * 60 * 1000;
-      for (const r of db.data.records) {
-        if (r.timestamp < oneHourAgo) {
-          delete r.requestBody;
-          delete r.responseBody;
-        }
-      }
-      await db.write();
-      log.ok(`Usage log cleaned: ${db.data.records.length} records remaining`);
+    const stat = statSync(LOGS_FILE);
+    if (stat.size > MAX_LOGS_FILE_SIZE) {
+      log.warn(`Logs file too large (${(stat.size / 1024 / 1024).toFixed(1)} MB), trimming...`);
+      logsDb.data.entries = logsDb.data.entries.slice(-500);
+      await logsDb.write();
+      log.ok(`Logs cleaned: ${logsDb.data.entries.length} entries remaining`);
     }
   } catch {}
 }
 
 // Run cleanup on startup
 await autoCleanup();
+await autoCleanupLogs();
 
-// Also clean stale "streaming" records from previous crashes
+// Migrate: strip bodies from existing usage records (one-time migration)
+let migrated = false;
 for (const r of db.data.records) {
+  if (r.requestBody || r.responseBody) {
+    delete r.requestBody;
+    delete r.responseBody;
+    migrated = true;
+  }
   if (r.status === "streaming") {
     r.status = 0;
     r.success = false;
-    r.responseBody = "[interrupted — server restarted]";
+    migrated = true;
   }
 }
-await db.write();
+if (migrated) {
+  await db.write();
+  log.ok("Migrated usage records: stripped bodies to logs.json");
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -178,11 +219,15 @@ export async function startRequest(params: {
     status: "streaming",
     latencyMs: 0,
     success: false,
-    requestBody: truncateBody(params.requestBody),
   };
 
   db.data.records.push(record);
   await db.write();
+
+  // Write request body to separate logs file
+  if (params.requestBody) {
+    await writeLogEntry(record.id, params.requestBody);
+  }
 
   return record.id;
 }
@@ -208,12 +253,16 @@ export async function completeRequest(params: {
   record.status = params.status;
   record.latencyMs = params.latencyMs;
   record.success = params.success;
-  record.responseBody = truncateBody(params.responseBody);
   record.cost = calculateCost(record.model, record.promptTokens, record.completionTokens);
 
   // Auto-cleanup after completing
   await autoCleanup();
   await db.write();
+
+  // Write response body to separate logs file
+  if (params.responseBody) {
+    await appendLogResponse(params.id, params.responseBody);
+  }
 
   log.info(
     `📊 ${record.model} | ` +
@@ -259,8 +308,6 @@ export async function recordUsage(params: {
     status: params.status,
     latencyMs: params.latencyMs,
     success: params.success,
-    requestBody: truncateBody(params.requestBody),
-    responseBody: truncateBody(params.responseBody),
     cost: calculateCost(params.model, params.promptTokens, params.completionTokens),
   };
 
@@ -268,6 +315,11 @@ export async function recordUsage(params: {
 
   await autoCleanup();
   await db.write();
+
+  // Write bodies to separate logs file
+  if (params.requestBody || params.responseBody) {
+    await writeLogEntry(record.id, params.requestBody, params.responseBody);
+  }
 
   log.info(
     `📊 ${record.model} | ` +
@@ -318,6 +370,24 @@ export function getRecords(filter?: {
     }
     return r;
   });
+}
+
+/**
+ * Get log bodies for a set of record IDs.
+ * Returns a map of id → { requestBody, responseBody }.
+ */
+export function getLogBodies(ids: string[]): Record<string, { requestBody?: string; responseBody?: string }> {
+  const idSet = new Set(ids);
+  const result: Record<string, { requestBody?: string; responseBody?: string }> = {};
+  for (const entry of logsDb.data.entries) {
+    if (idSet.has(entry.id)) {
+      result[entry.id] = {
+        requestBody: entry.requestBody,
+        responseBody: entry.responseBody,
+      };
+    }
+  }
+  return result;
 }
 
 /**
