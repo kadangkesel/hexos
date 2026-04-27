@@ -142,7 +142,6 @@ export function BatchAddSection() {
               { id: "kiro", label: "Kiro" },
               { id: "qoder", label: "Qoder" },
               { id: "codex", label: "Codex" },
-              { id: "yepapi", label: "YepAPI" },
             ].map((p) => (
               <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer">
                 <Checkbox

@@ -13,7 +13,6 @@ import { PROVIDERS } from "../config/providers.ts";
 import { resolveModel, getUpstreamModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
 import { augmentMessages, applyRulesDeep } from "../utils/transform.ts";
-import { injectToolsIntoMessages, parseToolCallsFromResponse, createYepApiToolCallTransformer } from "./yepapi-tools.ts";
 import { openaiToKiro } from "./kiro-transform.ts";
 import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
 import { buildQoderRequest, buildInferenceUrl, type QoderUserInfo } from "./qoder-auth.ts";
@@ -36,7 +35,7 @@ const MAX_FAILOVER_ATTEMPTS = Infinity;
  */
 async function refreshCreditAfterUse(conn: Connection): Promise<void> {
   try {
-    if (conn.provider === "codebuddy") {
+    if (conn.provider === "Service") {
       // Local credit tracking — just ensure credit is initialized
       await initializeCredit(conn.id, conn.provider);
     } else if (conn.provider === "cline") {
@@ -116,8 +115,6 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
   const isKiro = providerConfig.format === "kiro";
   const isQoder = providerConfig.format === "qoder";
   const isCodex = providerConfig.format === "codex";
-  const isYepapi = providerId === "yepapi";
-  const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
 
   // Build the process request body once (shared across failover attempts)
   // For Kiro/Qoder/Codex, we defer body building until we have the connection
@@ -298,15 +295,9 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
             continue;
           }
         }
-        // No refresh token — for API key providers, don't disable (keys don't expire,
-        // 401 likely means transient issue or wrong model). For OAuth, mark expired.
-        if (providerConfig.authType === "apikey") {
-          log.warn(`[${connLabel}] Unauthorized (401), API key provider — trying next account (key preserved)...`);
-          await recordFailure(conn.id);
-        } else {
-          log.warn(`[${connLabel}] Unauthorized (401), no refresh token — marking expired, trying next account...`);
-          await setConnectionStatus(conn.id, "expired");
-        }
+        // No refresh token — mark expired and failover to next account
+        log.warn(`[${connLabel}] Unauthorized (401), no refresh token — trying next account...`);
+        await setConnectionStatus(conn.id, "expired");
         lastError = `${connLabel}: Unauthorized (401)`;
         continue;
       }
@@ -342,13 +333,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
           if (lower.includes("credit") || lower.includes("quota") || lower.includes("balance") || lower.includes("insufficient") || lower.includes("exceeded")) {
             reason = "Credit exhausted";
             log.error(`[${connLabel}] Credit exhausted (429): ${body.slice(0, 200)}`);
-            // API key providers: don't disable — user can top up balance
-            if (providerConfig.authType !== "apikey") {
-              await setConnectionStatus(conn.id, "disabled");
-            } else {
-              log.warn(`[${connLabel}] API key provider — connection preserved (top up balance to fix)`);
-              await recordFailure(conn.id);
-            }
+            await setConnectionStatus(conn.id, "disabled");
           } else {
             log.warn(`[${connLabel}] Rate limited (429): ${body.slice(0, 200)}`);
           }
@@ -385,11 +370,6 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
       // Codex: convert Responses API SSE → OpenAI Chat Completions SSE
       if (isCodex && res.ok) {
         return await handleCodexResponse(res, resolvedModel, conn, startTime, modelId);
-      }
-
-      // YepAPI: emulate tool calling by parsing <tool_call> blocks from response
-      if (isYepapi && hasTools && res.ok) {
-        return await handleYepApiToolResponse(res, resolvedModel, conn, startTime, stream, modelId);
       }
 
       return addTrackingHeaders(res, resolvedModel, conn, startTime, modelId);
@@ -431,7 +411,7 @@ function pickConnection(providerId: string, triedIds: Set<string>): Connection |
  * CodeBuddy doesn't support OpenAI's `strict` mode or `additionalProperties` in tool schemas.
  * Also strips deeply nested schema features that cause "invalid function call parameters".
  */
-function cleanToolSchemas(tools: any[]): any[] {
+function sanitizeTools(tools: any[]): any[] {
   return tools.map((tool) => {
     if (tool.type !== "function" || !tool.function) return tool;
 
@@ -442,7 +422,7 @@ function cleanToolSchemas(tools: any[]): any[] {
 
     // Clean up parameters schema
     if (fn.parameters) {
-      fn.parameters = cleanSchema(fn.parameters);
+      fn.parameters = sanitizeSchema(fn.parameters);
     }
 
     return { type: "function", function: fn };
@@ -450,12 +430,12 @@ function cleanToolSchemas(tools: any[]): any[] {
 }
 
 /** Recursively clean JSON schema for upstream compatibility */
-function cleanSchema(schema: any): any {
+function sanitizeSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return schema;
 
   const cleaned = { ...schema };
 
-  // Remove additionalProperties (Service may not support it)
+  // Remove additionalProperties (CodeBuddy may not support it)
   delete cleaned.additionalProperties;
 
   // Remove $schema, $defs references
@@ -465,20 +445,20 @@ function cleanSchema(schema: any): any {
   if (cleaned.properties) {
     const props: Record<string, any> = {};
     for (const [key, value] of Object.entries(cleaned.properties)) {
-      props[key] = cleanSchema(value);
+      props[key] = sanitizeSchema(value);
     }
     cleaned.properties = props;
   }
 
   // Clean items in arrays
   if (cleaned.items) {
-    cleaned.items = cleanSchema(cleaned.items);
+    cleaned.items = sanitizeSchema(cleaned.items);
   }
 
   // Clean anyOf/oneOf/allOf
   for (const key of ["anyOf", "oneOf", "allOf"]) {
     if (Array.isArray(cleaned[key])) {
-      cleaned[key] = cleaned[key].map((s: any) => cleanSchema(s));
+      cleaned[key] = cleaned[key].map((s: any) => sanitizeSchema(s));
     }
   }
 
@@ -486,7 +466,7 @@ function cleanSchema(schema: any): any {
 }
 
 /**
- * Build the upstream request body.
+ * Build the sanitized upstream request body.
  */
 function buildUpstreamBody(body: any, model: string, stream: boolean, provider?: string): { finalBodyStr: string; model: string } {
   const {
@@ -531,28 +511,11 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
     }
   }
 
-  // Text-replacement filters only needed for Service (cb/) — upstream validates
-  // message content and rejects proxy/tool mentions. Other providers (cline, yepapi,
-  // codex, etc.) don't need this and messages should pass through unmodified.
-  if (provider === "codebuddy") {
-    upstreamBody.messages = augmentMessages(upstreamBody.messages, provider);
-  }
+  upstreamBody.messages = augmentMessages(upstreamBody.messages, provider);
 
   if (Array.isArray(tools) && tools.length > 0) {
-    if (provider === "yepapi") {
-      // YepAPI doesn't support native tool calling — inject tools into system prompt
-      // Pass tools as-is (no schema cleaning needed — YepAPI doesn't validate schemas)
-      const withTools = injectToolsIntoMessages({
-        ...upstreamBody,
-        tools,
-        tool_choice: tool_choice,
-      });
-      upstreamBody.messages = withTools.messages;
-      // Don't add tools/tool_choice to body — YepAPI would strip them
-    } else {
-      upstreamBody.tools = cleanToolSchemas(tools);
-      if (tool_choice) upstreamBody.tool_choice = tool_choice;
-    }
+    upstreamBody.tools = sanitizeTools(tools);
+    if (tool_choice) upstreamBody.tool_choice = tool_choice;
   }
 
   const sanitizedBody = (provider === "codebuddy" ? applyRulesDeep(upstreamBody) : upstreamBody) as any;
@@ -675,46 +638,6 @@ async function handleCodexResponse(
 }
 
 /**
- * Handle YepAPI response with tool call emulation.
- * Parses <tool_call> XML blocks from response content and converts to OpenAI tool_calls format.
- */
-async function handleYepApiToolResponse(
-  res: Response,
-  model: string,
-  conn: Connection,
-  startTime: number,
-  stream: boolean,
-  hexosModelId?: string,
-): Promise<Response> {
-  if (stream) {
-    // Stream: pipe through transformer that buffers, detects <tool_call>, emits OpenAI format
-    if (!res.body) {
-      return addTrackingHeaders(res, model, conn, startTime, hexosModelId);
-    }
-    const transformer = createYepApiToolCallTransformer(crypto.randomUUID());
-    const transformedStream = res.body.pipeThrough(transformer);
-    const response = new Response(transformedStream, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-      },
-    });
-    return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
-  } else {
-    // Non-stream: read body, parse tool calls, return modified JSON
-    const responseJson = await res.json();
-    const modified = parseToolCallsFromResponse(responseJson);
-    const response = new Response(JSON.stringify(modified), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-    return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
-  }
-}
-
-/**
  * Extract QoderUserInfo from a connection.
  * Qoder stores: accessToken = security_oauth_token, uid = user UUID,
  * label = email, refreshToken = refresh token.
@@ -750,24 +673,18 @@ function _getQoderUserInfo(conn: Connection): QoderUserInfo | null {
  */
 function buildHeaders(conn: Connection, providerConfig: any): Record<string, string> {
   // Check provider's auth format
+  let authHeader: string;
+  if (providerConfig.authFormat === "workos") {
+    authHeader = `Bearer workos:${conn.accessToken}`;
+  } else {
+    authHeader = `Bearer ${conn.accessToken}`;
+  }
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    Authorization: authHeader,
     ...(providerConfig.headers ?? {}),
   };
-
-  if (providerConfig.authFormat === "x-api-key") {
-    // x-api-key header auth (e.g. YepAPI)
-    headers["x-api-key"] = conn.accessToken;
-  } else {
-    // Bearer token auth (default)
-    let authHeader: string;
-    if (providerConfig.authFormat === "workos") {
-      authHeader = `Bearer workos:${conn.accessToken}`;
-    } else {
-      authHeader = `Bearer ${conn.accessToken}`;
-    }
-    headers["Authorization"] = authHeader;
-  }
 
   if (conn.uid && conn.provider === "codebuddy") {
     headers["X-User-Id"] = conn.uid;
@@ -798,7 +715,7 @@ function buildHeaders(conn: Connection, providerConfig: any): Record<string, str
 function debugScanBody(finalBodyStr: string, model: string, providerId?: string) {
   try {
     // Only scan for sensitive words on Service provider requests
-    if (providerId && providerId !== "codebuddy") return;
+    if (providerId && providerId !== "Service") return;
     const fs = require("fs");
     const debugDir = process.cwd();
     fs.writeFileSync(`${debugDir}/hexos-last-request.json`, finalBodyStr);

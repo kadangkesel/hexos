@@ -9,7 +9,6 @@ import {
   Brain,
   ChevronRight,
   Users,
-  KeyRound,
 } from "lucide-react";
 import {
   Card,
@@ -47,14 +46,6 @@ const providers: ProviderCard[] = [
     icon: Qoder.Color,
     href: "/providers/qoder",
     badge: "9 models"
-  },
-  {
-    id: "yepapi",
-    name: "YepAPI",
-    description: "Multi-model AI API — GPT, Claude, Gemini, DeepSeek, Grok, Llama, Qwen models via a single API key.",
-    icon: KeyRound,
-    href: "/providers/yepapi",
-    badge: "51 models"
   },
 ];
 
