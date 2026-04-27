@@ -94,7 +94,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     id: "yepapi",
     name: "YepAPI",
     format: "openai",
-    baseUrl: "https://api.yepapi.com/v1/chat/completions",
+    baseUrl: "https://api.yepapi.com/v1/ai/chat/completions",
     authType: "apikey",
     authFormat: "x-api-key",
   },
