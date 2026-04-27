@@ -6,7 +6,7 @@ export interface ProviderConfig {
   format: ProviderFormat;
   baseUrl: string;
   authType: "oauth" | "apikey";
-  authFormat?: "bearer" | "workos" | "kiro"; // default "bearer"
+  authFormat?: "bearer" | "workos" | "kiro" | "x-api-key"; // default "bearer"
   headers?: Record<string, string>;
 }
 
@@ -89,5 +89,13 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       "Accept": "text/event-stream",
       "User-Agent": "codex-cli/0.124.0",
     },
+  },
+  yepapi: {
+    id: "yepapi",
+    name: "YepAPI",
+    format: "openai",
+    baseUrl: "https://api.yepapi.com/v1/chat/completions",
+    authType: "apikey",
+    authFormat: "x-api-key",
   },
 };

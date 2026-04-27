@@ -511,7 +511,10 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
     }
   }
 
-  upstreamBody.messages = augmentMessages(upstreamBody.messages, provider);
+  // Skip text-replacement filters for providers that don't validate message content
+  if (provider !== "yepapi") {
+    upstreamBody.messages = augmentMessages(upstreamBody.messages, provider);
+  }
 
   if (Array.isArray(tools) && tools.length > 0) {
     upstreamBody.tools = sanitizeTools(tools);
@@ -673,18 +676,24 @@ function _getQoderUserInfo(conn: Connection): QoderUserInfo | null {
  */
 function buildHeaders(conn: Connection, providerConfig: any): Record<string, string> {
   // Check provider's auth format
-  let authHeader: string;
-  if (providerConfig.authFormat === "workos") {
-    authHeader = `Bearer workos:${conn.accessToken}`;
-  } else {
-    authHeader = `Bearer ${conn.accessToken}`;
-  }
-
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: authHeader,
     ...(providerConfig.headers ?? {}),
   };
+
+  if (providerConfig.authFormat === "x-api-key") {
+    // x-api-key header auth (e.g. YepAPI)
+    headers["x-api-key"] = conn.accessToken;
+  } else {
+    // Bearer token auth (default)
+    let authHeader: string;
+    if (providerConfig.authFormat === "workos") {
+      authHeader = `Bearer workos:${conn.accessToken}`;
+    } else {
+      authHeader = `Bearer ${conn.accessToken}`;
+    }
+    headers["Authorization"] = authHeader;
+  }
 
   if (conn.uid && conn.provider === "codebuddy") {
     headers["X-User-Id"] = conn.uid;

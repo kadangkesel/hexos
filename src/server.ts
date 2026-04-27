@@ -1225,6 +1225,40 @@ export function createApp() {
 
   // --- Codex OAuth PKCE endpoints ---
 
+  // --- YepAPI Auth ---
+
+  // Add YepAPI connection (API key)
+  app.post("/api/yepapi/add", async (c) => {
+    const body = await c.req.json();
+    const { apiKey, label } = body as { apiKey: string; label?: string };
+
+    if (!apiKey || typeof apiKey !== "string") {
+      return c.json({ error: "apiKey is required" }, 400);
+    }
+
+    if (!apiKey.startsWith("yep_sk_")) {
+      return c.json({ error: "Invalid API key format — must start with yep_sk_" }, 400);
+    }
+
+    // Save connection directly — no validation request (avoid wasting credits)
+    try {
+
+      // Key is valid — save connection
+      const conn = await saveConnection({
+        provider: "yepapi",
+        label: label || `YepAPI (${apiKey.slice(0, 8)}...)`,
+        accessToken: apiKey,
+        refreshToken: "",
+      });
+
+      return c.json({ ok: true, id: conn.id, valid: true });
+    } catch (e: any) {
+      return c.json({ error: `Failed to validate API key: ${e.message}` }, 500);
+    }
+  });
+
+  // --- Codex OAuth PKCE endpoints (continued) ---
+
   // Generate OAuth PKCE auth URL for dashboard popup flow
   app.get("/api/codex/auth-url", (c) => {
     const codeVerifier = crypto.randomBytes(32).toString("base64url");
