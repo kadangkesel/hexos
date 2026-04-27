@@ -511,8 +511,10 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
     }
   }
 
-  // Skip text-replacement filters for providers that don't validate message content
-  if (provider !== "yepapi") {
+  // Text-replacement filters only needed for Service (cb/) — upstream validates
+  // message content and rejects proxy/tool mentions. Other providers (cline, yepapi,
+  // codex, etc.) don't need this and messages should pass through unmodified.
+  if (provider === "Service") {
     upstreamBody.messages = augmentMessages(upstreamBody.messages, provider);
   }
 
