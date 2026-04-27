@@ -27,6 +27,7 @@ const LOGIN_SCRIPT = join(AUTOMATION_DIR, "login.py");
 const CLINE_LOGIN_SCRIPT = join(AUTOMATION_DIR, "cline_login.py");
 const KIRO_LOGIN_SCRIPT = join(AUTOMATION_DIR, "kiro_login.py");
 const QODER_LOGIN_SCRIPT = join(AUTOMATION_DIR, "qoder_login.py");
+const YEPAPI_LOGIN_SCRIPT = join(AUTOMATION_DIR, "yepapi_login.py");
 
 // Track active automation subprocesses for cleanup on cancel
 export const activeProcs = new Set<{ kill: () => void }>();
@@ -607,6 +608,9 @@ export async function batchConnect(
           } else if (provider === "qoder") {
             const r = await oauthQoderAutomated(account.email, account.password, label, proxy, headless);
             providerResults.push({ provider: "qoder", ...r });
+          } else if (provider === "yepapi") {
+            const r = await oauthYepapiAutomated(account.email, account.password, label, proxy, headless);
+            providerResults.push({ provider: "yepapi", ...r });
           }
         }
 
@@ -1376,6 +1380,104 @@ export async function checkQoderToken(
   } catch {
     return { valid: false };
   }
+}
+
+// ---------------------------------------------------------------------------
+// YepAPI: automated login via Camoufox (Google OAuth → generate API key)
+// ---------------------------------------------------------------------------
+
+export async function oauthYepapiAutomated(
+  email: string,
+  password: string,
+  label?: string,
+  proxy?: string,
+  headless = true,
+): Promise<{ success: boolean; apiKey?: string; error?: string }> {
+  const accountLabel = label || email;
+
+  if (!isAutomationReady()) {
+    log.error("Automation not set up. Run: hexos auth setup-automation");
+    return { success: false, error: "Automation not set up" };
+  }
+
+  log.info(`[${accountLabel}] Launching YepAPI browser automation...`);
+
+  const proc = Bun.spawn(
+    [VENV_PYTHON, YEPAPI_LOGIN_SCRIPT, "--email", email, "--password", password],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        HEXOS_DEBUG: process.env.HEXOS_DEBUG || "false",
+        ...(proxy ? { HEXOS_PROXY: proxy, HTTP_PROXY: proxy, HTTPS_PROXY: proxy } : {}),
+        HEXOS_HEADLESS: headless ? "true" : "false",
+      },
+    },
+  );
+  activeProcs.add(proc);
+
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: any = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === "progress") {
+            log.info(`[${accountLabel}] ${msg.message}`);
+          } else if (msg.type === "result") {
+            finalResult = msg;
+          } else if (msg.type === "error") {
+            log.error(`[${accountLabel}] ${msg.error}`);
+          } else if (msg.type === "debug") {
+            log.info(`[${accountLabel}] [debug] ${msg.message}`);
+          }
+        } catch {}
+      }
+    }
+  } finally {
+    activeProcs.delete(proc);
+  }
+
+  // Read stderr for diagnostics
+  try {
+    const stderrText = await new Response(proc.stderr).text();
+    if (stderrText.trim()) {
+      log.warn(`[${accountLabel}] stderr: ${stderrText.trim().slice(0, 500)}`);
+    }
+  } catch {}
+
+  if (!finalResult || !finalResult.success) {
+    const errMsg = finalResult?.error || "Unknown automation error";
+    log.error(`[${accountLabel}] YepAPI login failed: ${errMsg}`);
+    return { success: false, error: errMsg };
+  }
+
+  if (!finalResult.apiKey) {
+    log.error(`[${accountLabel}] YepAPI login succeeded but no API key generated.`);
+    return { success: false, error: "No API key generated" };
+  }
+
+  // Save connection
+  const conn = await saveConnection({
+    provider: "yepapi",
+    label: accountLabel,
+    accessToken: finalResult.apiKey,
+    refreshToken: "",
+  });
+
+  log.info(`[${accountLabel}] YepAPI connection saved (id: ${conn.id}, key: ${finalResult.apiKey.slice(0, 12)}...)`);
+  return { success: true, apiKey: finalResult.apiKey };
 }
 
 // ---------------------------------------------------------------------------
