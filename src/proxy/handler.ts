@@ -13,6 +13,7 @@ import { PROVIDERS } from "../config/providers.ts";
 import { resolveModel, getUpstreamModel } from "../config/models.ts";
 import { log } from "../utils/logger.ts";
 import { augmentMessages, applyRulesDeep } from "../utils/transform.ts";
+import { injectToolsIntoMessages, parseToolCallsFromResponse, createYepApiToolCallTransformer } from "./yepapi-tools.ts";
 import { openaiToKiro } from "./kiro-transform.ts";
 import { kiroToOpenAIStream, kiroToOpenAINonStream } from "./kiro-stream.ts";
 import { buildQoderRequest, buildInferenceUrl, type QoderUserInfo } from "./qoder-auth.ts";
@@ -115,6 +116,8 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
   const isKiro = providerConfig.format === "kiro";
   const isQoder = providerConfig.format === "qoder";
   const isCodex = providerConfig.format === "codex";
+  const isYepapi = providerId === "yepapi";
+  const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
 
   // Build the process request body once (shared across failover attempts)
   // For Kiro/Qoder/Codex, we defer body building until we have the connection
@@ -384,6 +387,11 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
         return await handleCodexResponse(res, resolvedModel, conn, startTime, modelId);
       }
 
+      // YepAPI: emulate tool calling by parsing <tool_call> blocks from response
+      if (isYepapi && hasTools && res.ok) {
+        return await handleYepApiToolResponse(res, resolvedModel, conn, startTime, stream, modelId);
+      }
+
       return addTrackingHeaders(res, resolvedModel, conn, startTime, modelId);
     } catch (e: any) {
       log.error(`[${connLabel}] Network error: ${e.message}`);
@@ -531,8 +539,19 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
   }
 
   if (Array.isArray(tools) && tools.length > 0) {
-    upstreamBody.tools = sanitizeTools(tools);
-    if (tool_choice) upstreamBody.tool_choice = tool_choice;
+    if (provider === "yepapi") {
+      // YepAPI doesn't support native tool calling — inject tools into system prompt
+      const withTools = injectToolsIntoMessages({
+        ...upstreamBody,
+        tools: process(tools),
+        tool_choice: tool_choice,
+      });
+      upstreamBody.messages = withTools.messages;
+      // Don't add tools/tool_choice to body — YepAPI would strip them
+    } else {
+      upstreamBody.tools = process(tools);
+      if (tool_choice) upstreamBody.tool_choice = tool_choice;
+    }
   }
 
   const sanitizedBody = (provider === "codebuddy" ? applyRulesDeep(upstreamBody) : upstreamBody) as any;
@@ -652,6 +671,46 @@ async function handleCodexResponse(
   });
 
   return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
+}
+
+/**
+ * Handle YepAPI response with tool call emulation.
+ * Parses <tool_call> XML blocks from response content and converts to OpenAI tool_calls format.
+ */
+async function handleYepApiToolResponse(
+  res: Response,
+  model: string,
+  conn: Connection,
+  startTime: number,
+  stream: boolean,
+  hexosModelId?: string,
+): Promise<Response> {
+  if (stream) {
+    // Stream: pipe through transformer that buffers, detects <tool_call>, emits OpenAI format
+    if (!res.body) {
+      return addTrackingHeaders(res, model, conn, startTime, hexosModelId);
+    }
+    const transformer = createYepApiToolCallTransformer(crypto.randomUUID());
+    const transformedStream = res.body.pipeThrough(transformer);
+    const response = new Response(transformedStream, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      },
+    });
+    return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
+  } else {
+    // Non-stream: read body, parse tool calls, return modified JSON
+    const responseJson = await res.json();
+    const modified = parseToolCallsFromResponse(responseJson);
+    const response = new Response(JSON.stringify(modified), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    return addTrackingHeaders(response, model, conn, startTime, hexosModelId);
+  }
 }
 
 /**
