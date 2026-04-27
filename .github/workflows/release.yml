@@ -116,6 +116,8 @@ jobs:
           cp src/automation/login.py dist/${{ matrix.target }}/automation/ || true
           cp src/automation/cline_login.py dist/${{ matrix.target }}/automation/ || true
           cp src/automation/kiro_login.py dist/${{ matrix.target }}/automation/ || true
+          cp src/automation/qoder_login.py dist/${{ matrix.target }}/automation/ || true
+          cp src/automation/yepapi_login.py dist/${{ matrix.target }}/automation/ || true
           cp src/automation/setup.py dist/${{ matrix.target }}/automation/ || true
           cp src/automation/requirements.txt dist/${{ matrix.target }}/automation/ || true
         shell: bash
