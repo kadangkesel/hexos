@@ -58,7 +58,9 @@ function extractToolCalls(content: string): {
     }
 
     try {
-      const parsed = JSON.parse(trimmed);
+      // Clean up common JSON issues: trailing commas, etc.
+      const cleaned = trimmed.replace(/,\s*}/g, "}").replace(/,\s*]/g, "]");
+      const parsed = JSON.parse(cleaned);
       if (parsed && typeof parsed.name === "string") {
         toolCalls.push({
           name: parsed.name,
@@ -97,32 +99,35 @@ export function injectToolsIntoMessages(body: any): any {
   const newBody = { ...body };
   const messages: any[] = [...(newBody.messages || [])];
 
-  // Build the tool injection prompt
-  const toolsJson = JSON.stringify(body.tools, null, 2);
-  let toolPrompt = `You have access to the following tools:
-<tools>
-${toolsJson}
-</tools>
+  // Build human-readable tool descriptions (not raw JSON dump)
+  const toolDescriptions = body.tools.map((t: any) => {
+    const fn = t.function || t;
+    const params = fn.parameters ? JSON.stringify(fn.parameters, null, 2) : "{}";
+    return `### ${fn.name}\n${fn.description || ""}\nParameters:\n\`\`\`json\n${params}\n\`\`\``;
+  }).join("\n\n");
 
-When you need to call a tool, respond ONLY with one or more tool call blocks:
+  const toolPrompt = `# Available Tools
+
+When you need to use a tool, output EXACTLY this format:
+
 <tool_call>
-{"name": "function_name", "arguments": {"arg": "value"}}
+{"name": "tool_name", "arguments": {"param1": "value1"}}
 </tool_call>
 
-If you don't need any tools, respond normally without any <tool_call> tags.`;
+Rules:
+1. Use EXACT <tool_call> and </tool_call> XML tags
+2. Inside must be valid JSON with "name" and "arguments" fields
+3. For multiple tool calls, use multiple separate <tool_call> blocks
+4. Do NOT wrap tool calls in markdown code blocks
+5. When calling tools, output ONLY <tool_call> blocks — no other text before or after
+6. String values in arguments must be properly JSON-escaped (newlines as \\n, quotes as \\", etc.)
+7. For file write operations, put the COMPLETE file content in the arguments — never truncate or summarize
 
-  // Handle tool_choice
-  if (body.tool_choice === "required") {
-    toolPrompt += "\n\nYou MUST call at least one tool.";
-  } else if (
-    body.tool_choice &&
-    typeof body.tool_choice === "object" &&
-    body.tool_choice.function?.name
-  ) {
-    toolPrompt += `\n\nYou MUST call the ${body.tool_choice.function.name} tool.`;
-  }
+## Tools
 
-  // Find the first system message and prepend tool prompt
+${toolDescriptions}`;
+
+  // Find the first system message and append tool prompt
   let systemFound = false;
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -139,7 +144,7 @@ If you don't need any tools, respond normally without any <tool_call> tags.`;
       messages[i] = {
         ...msg,
         role: "system",
-        content: toolPrompt + "\n\n" + existingContent,
+        content: existingContent + "\n\n" + toolPrompt,
       };
       systemFound = true;
       break;
@@ -147,12 +152,10 @@ If you don't need any tools, respond normally without any <tool_call> tags.`;
   }
 
   if (!systemFound) {
-    // No system message exists — create one at the beginning
     messages.unshift({ role: "system", content: toolPrompt });
   }
 
-  // Convert role:"tool" messages to role:"user" with XML wrapper
-  // Also convert assistant messages with tool_calls to show what was called
+  // Convert assistant tool_calls and role:"tool" messages for multi-turn context
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
 
@@ -184,7 +187,35 @@ If you don't need any tools, respond normally without any <tool_call> tags.`;
     }
   }
 
-  newBody.messages = messages;
+  // Merge consecutive same-role messages (especially user messages after tool->user conversion)
+  const merged: any[] = [];
+  for (const msg of messages) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.role === msg.role && prev.role === "user") {
+      prev.content = prev.content + "\n\n" + msg.content;
+    } else {
+      merged.push({ ...msg });
+    }
+  }
+
+  // Handle tool_choice: inject as a separate user message at the end for stronger enforcement
+  if (body.tool_choice === "required") {
+    merged.push({
+      role: "user",
+      content: "[SYSTEM: You MUST use at least one tool. Output <tool_call> blocks only.]",
+    });
+  } else if (
+    body.tool_choice &&
+    typeof body.tool_choice === "object" &&
+    body.tool_choice.function?.name
+  ) {
+    merged.push({
+      role: "user",
+      content: `[SYSTEM: You MUST call the "${body.tool_choice.function.name}" tool now. Output <tool_call> block only.]`,
+    });
+  }
+
+  newBody.messages = merged;
 
   // Remove tools and tool_choice so YepAPI doesn't see them
   delete newBody.tools;
