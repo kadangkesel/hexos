@@ -431,7 +431,7 @@ function pickConnection(providerId: string, triedIds: Set<string>): Connection |
  * CodeBuddy doesn't support OpenAI's `strict` mode or `additionalProperties` in tool schemas.
  * Also strips deeply nested schema features that cause "invalid function call parameters".
  */
-function sanitizeTools(tools: any[]): any[] {
+function cleanToolSchemas(tools: any[]): any[] {
   return tools.map((tool) => {
     if (tool.type !== "function" || !tool.function) return tool;
 
@@ -442,7 +442,7 @@ function sanitizeTools(tools: any[]): any[] {
 
     // Clean up parameters schema
     if (fn.parameters) {
-      fn.parameters = sanitizeSchema(fn.parameters);
+      fn.parameters = cleanSchema(fn.parameters);
     }
 
     return { type: "function", function: fn };
@@ -550,7 +550,7 @@ function buildUpstreamBody(body: any, model: string, stream: boolean, provider?:
       upstreamBody.messages = withTools.messages;
       // Don't add tools/tool_choice to body — YepAPI would strip them
     } else {
-      upstreamBody.tools = process(tools);
+      upstreamBody.tools = cleanToolSchemas(tools);
       if (tool_choice) upstreamBody.tool_choice = tool_choice;
     }
   }
