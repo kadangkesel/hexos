@@ -77,23 +77,26 @@ function getProviderTag(id: string): string {
   if (id.startsWith("kr/")) return "Kiro";
   if (id.startsWith("qd/")) return "Qoder";
   if (id.startsWith("cx/")) return "Codex";
-  return "CodeBuddy";
+  if (id.startsWith("yp/")) return "YepAPI";
+  return "Service";
 }
 
 const PROVIDER_BADGE: Record<string, string> = {
-  CodeBuddy: "bg-amber-500/15 text-amber-500",
+  Service: "bg-amber-500/15 text-amber-500",
   Cline: "bg-emerald-500/15 text-emerald-500",
   Kiro: "bg-sky-500/15 text-sky-500",
   Qoder: "bg-violet-500/15 text-violet-500",
   Codex: "bg-emerald-600/15 text-emerald-600",
+  YepAPI: "bg-rose-500/15 text-rose-500",
 };
 
 const PROVIDER_SHORT: Record<string, string> = {
-  CodeBuddy: "CB",
+  Service: "CB",
   Cline: "CL",
   Kiro: "KR",
   Qoder: "QD",
   Codex: "CX",
+  YepAPI: "YP",
 };
 
 /* ------------------------------------------------------------------ */
