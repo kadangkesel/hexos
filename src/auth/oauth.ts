@@ -1,4 +1,5 @@
 import { saveConnection } from "./store.ts";
+import { commitRefreshToken, getLatestTokenBundle, releaseRefreshToken, reserveRefreshToken, saveTokenBundle } from "./token-vault.ts";
 import { log } from "../utils/logger.ts";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -1419,29 +1420,45 @@ export async function refreshCodex(
   }
 
   const refreshPromise = (async () => {
+    let reserved: { refreshToken: string; generation: number } | null = null;
     try {
+      const vaulted = await getLatestTokenBundle("codex", connectionId);
+      if (vaulted?.refreshToken && vaulted.refreshToken !== refreshToken) {
+        log.warn(`[codex] DB refresh token is stale for ${connectionId}; using token vault copy`);
+      }
+
+      // CRITICAL: Codex refresh tokens rotate. Reserve the current token in a
+      // cross-process vault before spending it so parallel server instances or
+      // boot restarts cannot spend the same token twice.
+      reserved = await reserveRefreshToken("codex", connectionId);
+
       const res = await fetch(CODEX_TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           grant_type: "refresh_token",
           client_id: CODEX_CLIENT_ID,
-          refresh_token: refreshToken,
+          refresh_token: reserved.refreshToken,
         }),
       });
 
       if (!res.ok) {
         const error = await res.text();
+        await releaseRefreshToken("codex", connectionId, reserved.generation, false);
         throw new Error(`Codex token refresh failed (${res.status}): ${error}`);
       }
 
       const data = await res.json();
-      log.info(`[codex] Token refreshed successfully (expires in ${data.expires_in}s)`);
+      if (!data?.access_token || !data?.refresh_token) {
+        await releaseRefreshToken("codex", connectionId, reserved.generation, false);
+        throw new Error(`Codex token refresh returned incomplete token payload`);
+      }
 
-      // CRITICAL: Save new rotating refresh token atomically
-      await saveConnection(connectionId, {
+      log.info(`[codex] Token refreshed successfully (expires in ${data.expires_in}s)`);
+      await commitRefreshToken("codex", connectionId, reserved.generation, {
         accessToken: data.access_token,
         refreshToken: data.refresh_token,
+        source: "refreshCodex",
       });
 
       return { accessToken: data.access_token, refreshToken: data.refresh_token };
@@ -1551,12 +1568,20 @@ export async function oauthCodexLogin(): Promise<{
             clearTimeout(timeout);
             server.stop();
 
-            resolve({
+            const tokenBundle = {
               accessToken: tokens.access_token,
               refreshToken: tokens.refresh_token,
               email: parsed.email || "unknown",
               planType: parsed.planType || "unknown",
+              userId: parsed.userId,
+            };
+            const vaultId = `codex:${tokenBundle.email}:${tokenBundle.userId || "unknown"}`;
+            await saveTokenBundle("codex", vaultId, {
+              accessToken: tokenBundle.accessToken,
+              refreshToken: tokenBundle.refreshToken,
+              source: "oauthCodexLogin",
             });
+            resolve(tokenBundle);
           } catch (err) {
             clearTimeout(timeout);
             server.stop();
