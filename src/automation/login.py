@@ -384,6 +384,72 @@ async def _handle_page_expired(page, progress=None) -> bool:
     return True
 
 
+async def _confirm_codebuddy_terms_modal(target) -> bool:
+    """Confirm CodeBuddy Service Agreements / Privacy modal if it is visible."""
+    markers = [
+        "Service Agreements",
+        "Privacy",
+        "Privacy terms",
+        "Terms of Service",
+        "Privacy Policy",
+    ]
+
+    modal_visible = False
+    for marker in markers:
+        try:
+            loc = target.get_by_text(marker, exact=False).first
+            if await loc.count() > 0 and await loc.is_visible(timeout=500):
+                modal_visible = True
+                break
+        except Exception:
+            continue
+
+    if not modal_visible:
+        return False
+
+    button_texts = [
+        "Confirm",
+        "I agree",
+        "Agree",
+        "Accept",
+        "OK",
+        "Got it",
+        "Konfirmasi",
+        "Setuju",
+    ]
+    for text in button_texts:
+        try:
+            btn = target.get_by_text(text, exact=True).first
+            if await btn.count() > 0 and await btn.is_visible(timeout=800):
+                await btn.click(force=True, timeout=3000)
+                await asyncio.sleep(0.3)
+                return True
+        except Exception:
+            continue
+
+    try:
+        clicked = bool(
+            await target.evaluate(
+                """() => {
+                    const wanted = ['confirm', 'i agree', 'agree', 'accept', 'ok', 'got it', 'konfirmasi', 'setuju'];
+                    for (const el of document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]')) {
+                        const txt = (el.textContent || el.value || '').trim().toLowerCase();
+                        if (el.offsetParent !== null && wanted.some(w => txt === w || txt.includes(w))) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }"""
+            )
+        )
+        if clicked:
+            await asyncio.sleep(0.3)
+        return clicked
+    except Exception:
+        return False
+
+
 async def _handle_codebuddy_landing(page) -> bool:
     """Handle the CodeBuddy login landing page: click ToS checkbox + Google button.
 
@@ -409,19 +475,12 @@ async def _handle_codebuddy_landing(page) -> bool:
     clicked_checkbox = False
     clicked_google = False
 
-    # Click ToS checkbox (div.checkmark)
-    try:
-        chk = await target.query_selector("div.checkmark")
-        if chk and await chk.is_visible():
-            await chk.click(timeout=3000)
-            clicked_checkbox = True
-            await asyncio.sleep(0.3)
-    except Exception:
-        pass
+    await _confirm_codebuddy_terms_modal(target)
 
-    # Also try input[type=checkbox] or label with checkbox
-    if not clicked_checkbox:
-        for sel in ["input[type='checkbox']", "label.checkbox", "span.checkmark"]:
+    # Click ToS checkbox. The first click may open a Terms/Privacy modal;
+    # confirm it, then retry the checkbox so the Google button becomes enabled.
+    for attempt in range(2):
+        for sel in ["div.checkmark", "input[type='checkbox']", "label.checkbox", "span.checkmark"]:
             try:
                 el = await target.query_selector(sel)
                 if el and await el.is_visible():
@@ -431,6 +490,15 @@ async def _handle_codebuddy_landing(page) -> bool:
                     break
             except Exception:
                 continue
+
+        if await _confirm_codebuddy_terms_modal(target):
+            clicked_checkbox = False
+            continue
+        if clicked_checkbox or attempt == 1:
+            break
+
+    if clicked_checkbox:
+        await _confirm_codebuddy_terms_modal(target)
 
     # Click Google login button by id
     try:
@@ -463,7 +531,16 @@ async def _handle_codebuddy_landing(page) -> bool:
             except Exception:
                 continue
 
-    return clicked_checkbox or clicked_google
+    if not clicked_google and await _confirm_codebuddy_terms_modal(target):
+        try:
+            google_btn = await target.query_selector("#social-google")
+            if google_btn and await google_btn.is_visible():
+                await google_btn.click(timeout=3000)
+                clicked_google = True
+        except Exception:
+            pass
+
+    return clicked_google
 
 
 async def _handle_google_consent(page) -> bool:
