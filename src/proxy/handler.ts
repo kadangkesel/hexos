@@ -209,6 +209,7 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
             refreshToken: refreshed.refreshToken,
           });
           conn.accessToken = refreshed.accessToken;
+          conn.refreshToken = refreshed.refreshToken;
         } catch (e: any) {
           log.warn(`[${connLabel}] Proactive Codex refresh failed: ${e.message}`);
         }
@@ -290,14 +291,22 @@ export async function proxyRequest(modelId: string, body: any, stream: boolean):
             continue;
           } catch (e) {
             log.error(`[${connLabel}] Token refresh failed: ${e}`);
-            await setConnectionStatus(conn.id, "expired");
+            if (conn.provider === "codex") {
+              await recordFailure(conn.id);
+            } else {
+              await setConnectionStatus(conn.id, "expired");
+            }
             lastError = `${connLabel}: Token refresh failed`;
             continue;
           }
         }
         // No refresh token — mark expired and failover to next account
         log.warn(`[${connLabel}] Unauthorized (401), no refresh token — trying next account...`);
-        await setConnectionStatus(conn.id, "expired");
+        if (conn.provider === "codex") {
+          await recordFailure(conn.id);
+        } else {
+          await setConnectionStatus(conn.id, "expired");
+        }
         lastError = `${connLabel}: Unauthorized (401)`;
         continue;
       }

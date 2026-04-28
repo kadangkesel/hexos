@@ -1,4 +1,4 @@
-import { saveConnection } from "./store.ts";
+import { getConnections, saveConnection, updateConnection } from "./store.ts";
 import { log } from "../utils/logger.ts";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -1420,31 +1420,67 @@ export async function refreshCodex(
 
   const refreshPromise = (async () => {
     try {
-      const res = await fetch(CODEX_TOKEN_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          client_id: CODEX_CLIENT_ID,
-          refresh_token: refreshToken,
-        }),
-      });
+      let attempts = 0;
+      const maxAttempts = 3;
 
-      if (!res.ok) {
-        const error = await res.text();
-        throw new Error(`Codex token refresh failed (${res.status}): ${error}`);
+      while (attempts < maxAttempts) {
+        try {
+          const res = await fetch(CODEX_TOKEN_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              client_id: CODEX_CLIENT_ID,
+              refresh_token: refreshToken,
+            }),
+          });
+
+        if (!res.ok) {
+          const error = await res.text();
+          const errorText = error.toLowerCase();
+          
+          // Handle refresh_token_reused error by fetching latest refresh token
+          if (errorText.includes("refresh_token_reused") && attempts < maxAttempts - 1) {
+            log.warn(`[codex] Refresh token reused, fetching latest from DB and retrying...`);
+            // Fetch latest connection data to get updated refresh token
+            const connections = getConnections("codex");
+            const conn = connections.find(c => c.id === connectionId);
+            if (conn && conn.accessToken && !isCodexTokenExpired(conn.accessToken, 60)) {
+              return { accessToken: conn.accessToken, refreshToken: conn.refreshToken || refreshToken };
+            }
+            if (conn && conn.refreshToken && conn.refreshToken !== refreshToken) {
+              refreshToken = conn.refreshToken;
+              attempts++;
+              continue;
+            } else {
+              throw new Error(`Codex token refresh failed (${res.status}): ${error} - no valid refresh token found in DB`);
+            }
+          }
+          
+          throw new Error(`Codex token refresh failed (${res.status}): ${error}`);
+        }
+
+          const data = await res.json();
+          log.info(`[codex] Token refreshed successfully (expires in ${data.expires_in}s)`);
+
+          // CRITICAL: Save new rotating refresh token atomically
+          await updateConnection(connectionId, {
+            accessToken: data.access_token,
+            refreshToken: data.refresh_token,
+          });
+
+          return { accessToken: data.access_token, refreshToken: data.refresh_token };
+        } catch (e: any) {
+          attempts++;
+          if (attempts >= maxAttempts) {
+            throw e;
+          }
+          log.warn(`[codex] Refresh attempt ${attempts} failed: ${e.message}, retrying...`);
+          await Bun.sleep(1000 * attempts); // Exponential backoff
+        }
       }
 
-      const data = await res.json();
-      log.info(`[codex] Token refreshed successfully (expires in ${data.expires_in}s)`);
-
-      // CRITICAL: Save new rotating refresh token atomically
-      await saveConnection(connectionId, {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-      });
-
-      return { accessToken: data.access_token, refreshToken: data.refresh_token };
+      throw new Error(`Codex token refresh failed after ${maxAttempts} attempts`);
     } finally {
       codexRefreshLocks.delete(connectionId);
     }
