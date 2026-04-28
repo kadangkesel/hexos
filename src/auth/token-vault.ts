@@ -47,11 +47,11 @@ function readVault(): TokenVaultData {
   }
 }
 
-function writeVault(data: TokenVaultData) {
+async function writeVault(data: TokenVaultData) {
   ensureDirs();
   const file = vaultFile();
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  Bun.write(tmp, JSON.stringify(data, null, 2));
+  await Bun.write(tmp, JSON.stringify(data, null, 2));
   renameSync(tmp, file);
 }
 
@@ -94,7 +94,7 @@ export async function saveTokenBundle(
   backupVault("save");
   if (existing) Object.assign(existing, next);
   else data.bundles.push(next);
-  writeVault(data);
+  await writeVault(data);
   return next;
 }
 
@@ -122,7 +122,7 @@ export async function reserveRefreshToken(
   bundle.refreshStartedAt = now;
   bundle.refreshLockExpiresAt = now + lockTtlMs;
   bundle.updatedAt = now;
-  writeVault(data);
+  await writeVault(data);
 
   return { refreshToken: bundle.refreshToken, generation: bundle.generation };
 }
@@ -155,7 +155,7 @@ export async function commitRefreshToken(
   bundle.refreshInProgress = false;
   delete bundle.refreshStartedAt;
   delete bundle.refreshLockExpiresAt;
-  writeVault(data);
+  await writeVault(data);
   return bundle;
 }
 
@@ -175,5 +175,5 @@ export async function releaseRefreshToken(
   delete bundle.refreshStartedAt;
   delete bundle.refreshLockExpiresAt;
   bundle.updatedAt = Date.now();
-  writeVault(data);
+  await writeVault(data);
 }
