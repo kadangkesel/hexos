@@ -138,12 +138,12 @@ async def _fill_google_email_step(page, email: str) -> bool:
                     }
                     return false;
                 }""", email)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
                 # Try clicking Next
                 clicked = await _click_google_next(page)
                 if not clicked:
                     await page.keyboard.press("Enter")
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(1.0)
                 return True
         except Exception as exc:
             debug(f"Fallback input error: {exc}")
@@ -165,7 +165,7 @@ async def _fill_google_email_step(page, email: str) -> bool:
 
         await locator.scroll_into_view_if_needed()
         await locator.click(force=True)
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.1)
 
         # Clear existing value
         try:
@@ -174,14 +174,14 @@ async def _fill_google_email_step(page, email: str) -> bool:
         except Exception:
             pass
 
-        # Type character by character (same as enowxai reference)
+        # Type character by character
         try:
-            await locator.press_sequentially(email, delay=60)
+            await locator.press_sequentially(email, delay=25)
         except Exception as exc:
             debug(f"press_sequentially failed: {exc}")
             return False
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.2)
 
         # Verify typed value
         val = await locator.input_value()
@@ -189,7 +189,7 @@ async def _fill_google_email_step(page, email: str) -> bool:
             debug(f"Email mismatch: typed={val!r} expected={email!r}")
             return False
 
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.15)
 
         # Click Next or press Enter
         clicked = await _click_google_next(page)
@@ -233,7 +233,7 @@ async def _fill_google_password_step(page, password: str) -> bool:
 
             await locator.scroll_into_view_if_needed()
             await locator.click(force=True)
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
 
             try:
                 await locator.press("Control+a")
@@ -242,12 +242,12 @@ async def _fill_google_password_step(page, password: str) -> bool:
                 pass
 
             try:
-                await locator.press_sequentially(password, delay=70)
+                await locator.press_sequentially(password, delay=30)
             except Exception as exc:
                 debug(f"Password press_sequentially failed: {exc}")
                 continue
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
             typed_len = 0
             try:
                 val = await locator.input_value()
@@ -1161,7 +1161,7 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
 
         # Wait for Google page to fully load
         progress("auth_loop", "Waiting for login page...")
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(1.5)
         
         progress("auth_loop", "Automating Google login...")
         
@@ -1257,9 +1257,9 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
                     progress("google_email", "Filling Google email...")
                     filled = await _fill_google_email_step(page, email)
                     if filled:
-                        email_transition_deadline = time.monotonic() + 6.0
+                        email_transition_deadline = time.monotonic() + 4.0
                         progress("google_email_done", "Email submitted")
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.5)
                         continue
                     else:
                         progress("google_email_fail", "Failed to fill email field, retrying...")
@@ -1271,19 +1271,19 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
                     progress("google_password", "Filling Google password...")
                     filled = await _fill_google_password_step(page, password)
                     if filled:
-                        password_transition_deadline = time.monotonic() + 8.0
+                        password_transition_deadline = time.monotonic() + 5.0
                         progress("google_password_done", "Password submitted")
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.5)
                         continue
 
                 if not at_email and not at_password and await _is_account_picker(page):
                     debug("Account picker detected")
                     picked = await _click_account_in_picker(page, email)
                     if picked:
-                        await asyncio.sleep(2.0)
+                        await asyncio.sleep(1.0)
                         continue
                     await _click_continue_button(page)
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(0.8)
                     continue
 
                 if at_email or at_password:
@@ -1380,7 +1380,7 @@ async def run_login(email: str, password: str, state: str, auth_url: str):
                         return
 
             await _click_continue_button(page)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
         else:
             poll_task.cancel()
             result_failure("Auth loop timeout: did not reach callback in time")
