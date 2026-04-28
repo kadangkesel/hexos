@@ -5,7 +5,7 @@ Multi-provider AI API proxy with multi-account management, browser automation, a
 
 Built with [Bun](https://bun.sh) + [Hono](https://hono.dev) + [lowdb](https://github.com/typicode/lowdb). Dashboard with [Next.js 16](https://nextjs.org) + [Tailwind v4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com).
 
-![Hexos Dashboard](docs/preview.png)
+![Hexos Dashboard](preview.png)
 
 ## Install
 

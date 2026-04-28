@@ -2,6 +2,7 @@ import { JSONFilePreset } from "lowdb/node";
 import { join } from "path";
 import { homedir } from "os";
 import { generateApiKey } from "../utils/crypto.ts";
+import { getLatestTokenBundle, saveTokenBundle } from "./token-vault.ts";
 
 const DATA_DIR = join(homedir(), ".hexos");
 await Bun.write(join(DATA_DIR, ".keep"), "").catch(() => {});
@@ -49,6 +50,24 @@ for (const conn of db.data.connections) {
   if (conn.lastUsedAt === undefined) conn.lastUsedAt = null;
   if (conn.status === undefined) conn.status = "active";
   if (conn.failCount === undefined) conn.failCount = 0;
+
+  // Codex refresh tokens rotate and are easy to lose if a process dies between
+  // upstream refresh success and db.json write. Mirror them into a small
+  // append-safe vault and restore the newest bundle on boot.
+  if (conn.provider === "codex" && conn.refreshToken) {
+    const vaulted = await getLatestTokenBundle(conn.provider, conn.id);
+    if (vaulted && vaulted.updatedAt > (conn.createdAt ?? 0) && vaulted.refreshToken !== conn.refreshToken) {
+      conn.accessToken = vaulted.accessToken;
+      conn.refreshToken = vaulted.refreshToken;
+      conn.status = "active";
+    } else if (!vaulted) {
+      await saveTokenBundle(conn.provider, conn.id, {
+        accessToken: conn.accessToken,
+        refreshToken: conn.refreshToken,
+        source: "store-migration",
+      });
+    }
+  }
 }
 
 // API Keys
@@ -104,10 +123,25 @@ export async function saveConnection(conn: Omit<Connection, "id" | "createdAt" |
       ...patch,
     };
     await db.write();
-    return db.data.connections[existing];
+    const saved = db.data.connections[existing];
+    if (saved.provider === "codex" && saved.refreshToken) {
+      await saveTokenBundle(saved.provider, saved.id, {
+        accessToken: saved.accessToken,
+        refreshToken: saved.refreshToken,
+        source: "saveConnection",
+      });
+    }
+    return saved;
   }
   db.data.connections.push(full);
   await db.write();
+  if (full.provider === "codex" && full.refreshToken) {
+    await saveTokenBundle(full.provider, full.id, {
+      accessToken: full.accessToken,
+      refreshToken: full.refreshToken,
+      source: "saveConnection",
+    });
+  }
   return full;
 }
 
@@ -195,6 +229,14 @@ export async function updateConnection(id: string, patch: Partial<Connection>) {
   if (idx >= 0) {
     db.data.connections[idx] = { ...db.data.connections[idx], ...patch };
     await db.write();
+    const saved = db.data.connections[idx];
+    if (saved.provider === "codex" && saved.refreshToken && (patch.accessToken || patch.refreshToken)) {
+      await saveTokenBundle(saved.provider, saved.id, {
+        accessToken: saved.accessToken,
+        refreshToken: saved.refreshToken,
+        source: "updateConnection",
+      });
+    }
   }
 }
 
